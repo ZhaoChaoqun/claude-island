@@ -8,9 +8,16 @@ import json
 import os
 import socket
 import sys
+import time
 
 SOCKET_PATH = "/tmp/claude-island.sock"
 TIMEOUT_SECONDS = 300  # 5 minutes for permission decisions
+MAX_RETRIES = 3
+RETRY_DELAY = 0.3  # seconds between retries
+
+# Log to stderr so it doesn't interfere with hook output to stdout
+def _log(msg):
+    print(f"[claude-island-hook] {msg}", file=sys.stderr)
 
 
 def get_tty():
@@ -49,26 +56,82 @@ def get_tty():
     return None
 
 
-def send_event(state):
-    """Send event to app, return response if any"""
-    try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(TIMEOUT_SECONDS)
-        sock.connect(SOCKET_PATH)
-        sock.sendall(json.dumps(state).encode())
+def send_event(state, retries=MAX_RETRIES):
+    """Send event to app with retry logic. Returns response if any."""
+    is_permission = state.get("status") == "waiting_for_approval"
 
-        # For permission requests, wait for response
-        if state.get("status") == "waiting_for_approval":
-            response = sock.recv(4096)
-            sock.close()
-            if response:
-                return json.loads(response.decode())
-        else:
-            sock.close()
+    for attempt in range(1, retries + 1):
+        sock = None
+        try:
+            # Check socket file exists before attempting connection
+            if not os.path.exists(SOCKET_PATH):
+                if attempt < retries:
+                    _log(f"Socket not found at {SOCKET_PATH}, retry {attempt}/{retries}")
+                    time.sleep(RETRY_DELAY)
+                    continue
+                else:
+                    _log(f"Socket not found at {SOCKET_PATH} after {retries} attempts — is ClaudeIsland.app running?")
+                    return None
 
-        return None
-    except (socket.error, OSError, json.JSONDecodeError):
-        return None
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(TIMEOUT_SECONDS if is_permission else 5)
+            sock.connect(SOCKET_PATH)
+
+            payload = json.dumps(state).encode()
+            sock.sendall(payload)
+            # Shut down the write side so the server sees EOF
+            sock.shutdown(socket.SHUT_WR)
+
+            # For permission requests, wait for response
+            if is_permission:
+                chunks = []
+                while True:
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                sock.close()
+                sock = None
+                if chunks:
+                    return json.loads(b"".join(chunks).decode())
+                return None
+            else:
+                sock.close()
+                sock = None
+                return None
+
+        except (ConnectionRefusedError, FileNotFoundError) as e:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            if attempt < retries:
+                _log(f"Connection failed ({e}), retry {attempt}/{retries}")
+                time.sleep(RETRY_DELAY)
+            else:
+                _log(f"Connection failed after {retries} attempts: {e}")
+                return None
+
+        except (socket.timeout, socket.error, OSError) as e:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            _log(f"Socket error: {e}")
+            return None
+
+        except json.JSONDecodeError as e:
+            if sock:
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+            _log(f"Invalid JSON response: {e}")
+            return None
+
+    return None
 
 
 def main():
