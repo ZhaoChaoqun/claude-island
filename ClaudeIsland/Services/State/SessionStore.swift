@@ -137,6 +137,16 @@ actor SessionStore {
         if let pid = event.pid {
             let tree = ProcessTreeBuilder.shared.buildTree()
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
+
+            // Resolve terminal app if not already resolved
+            if session.resolvedTerminal == nil {
+                session.resolvedTerminal = TerminalResolver.shared.resolve(claudePid: pid)
+                if let terminal = session.resolvedTerminal {
+                    Self.logger.debug("Resolved terminal: \(terminal.appInfo.displayName, privacy: .public) for session \(sessionId.prefix(8), privacy: .public)")
+                    // Update isInTmux from resolved terminal (more accurate)
+                    session.isInTmux = terminal.isInTmux
+                }
+            }
         }
         if let tty = event.tty {
             session.tty = tty.replacingOccurrences(of: "/dev/", with: "")

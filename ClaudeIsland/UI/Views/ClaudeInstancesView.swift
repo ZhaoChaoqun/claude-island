@@ -90,13 +90,23 @@ struct ClaudeInstancesView: View {
     // MARK: - Actions
 
     private func focusSession(_ session: SessionState) {
-        guard session.isInTmux else { return }
-
         Task {
-            if let pid = session.pid {
-                _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
-            } else {
-                _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+            // Strategy 1: Use resolved terminal info for precise jumping
+            if let terminal = session.resolvedTerminal {
+                _ = await WindowFocuser.shared.focusTerminal(
+                    info: terminal.appInfo,
+                    sessionPid: session.pid
+                )
+                return
+            }
+
+            // Strategy 2: Legacy yabai path for tmux sessions
+            if session.isInTmux {
+                if let pid = session.pid {
+                    _ = await YabaiController.shared.focusWindow(forClaudePid: pid)
+                } else {
+                    _ = await YabaiController.shared.focusWindow(forWorkingDirectory: session.cwd)
+                }
             }
         }
     }
@@ -140,7 +150,6 @@ struct InstanceRow: View {
 
     @State private var isHovered = false
     @State private var spinnerPhase = 0
-    @State private var isYabaiAvailable = false
     @State private var isPreviewExpanded = true
 
     private let claudeOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
@@ -195,25 +204,35 @@ struct InstanceRow: View {
                 .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
         )
         .onHover { isHovered = $0 }
-        .task {
-            isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
-        }
     }
 
     // MARK: - Main Row
 
     private var mainRow: some View {
         HStack(alignment: .center, spacing: 10) {
-            // State indicator on left
-            stateIndicator
+            // Terminal type icon + state indicator on left
+            terminalTypeIcon
                 .frame(width: 14)
 
             // Text content
             VStack(alignment: .leading, spacing: 2) {
-                Text(session.displayTitle)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(.white)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(session.displayTitle)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+
+                    // Terminal badge (small, subtle)
+                    if let terminalName = session.terminalDisplayName {
+                        Text(terminalName)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundColor(.white.opacity(0.25))
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Color.white.opacity(0.06))
+                            .clipShape(Capsule())
+                    }
+                }
 
                 // Show tool call when waiting for approval/answer, otherwise last activity
                 if isWaitingForAnswer, let ctx = session.activeQuestion {
@@ -337,10 +356,11 @@ struct InstanceRow: View {
                         onChat()
                     }
 
-                    // Go to Terminal button (only if yabai available)
-                    if isYabaiAvailable {
-                        TerminalButton(
-                            isEnabled: session.isInTmux,
+                    // Go to Terminal button (available when we know the terminal app)
+                    if session.canJumpToTerminal {
+                        TerminalJumpButton(
+                            iconName: session.terminalIconName,
+                            terminalName: session.terminalDisplayName,
                             onTap: { onFocus() }
                         )
                     }
@@ -360,9 +380,9 @@ struct InstanceRow: View {
                         onChat()
                     }
 
-                    // Focus icon (only for tmux instances with yabai)
-                    if session.isInTmux && isYabaiAvailable {
-                        IconButton(icon: "eye") {
+                    // Terminal jump button (for any session with a resolved terminal)
+                    if session.canJumpToTerminal {
+                        IconButton(icon: session.terminalIconName) {
                             onFocus()
                         }
                     }
@@ -406,8 +426,9 @@ struct InstanceRow: View {
         .padding(.bottom, 4)
     }
 
+    /// Terminal-aware state indicator: shows terminal icon when idle, phase indicator when active
     @ViewBuilder
-    private var stateIndicator: some View {
+    private var terminalTypeIcon: some View {
         switch session.phase {
         case .processing, .compacting:
             Text(spinnerSymbols[spinnerPhase % spinnerSymbols.count])
@@ -428,13 +449,13 @@ struct InstanceRow: View {
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(TerminalColors.amber)
         case .waitingForInput:
-            Circle()
-                .fill(TerminalColors.green)
-                .frame(width: 6, height: 6)
+            Image(systemName: session.terminalIconName)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(TerminalColors.green)
         case .idle, .ended:
-            Circle()
-                .fill(Color.white.opacity(0.2))
-                .frame(width: 6, height: 6)
+            Image(systemName: session.terminalIconName)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.white.opacity(0.25))
         }
     }
 
@@ -559,7 +580,35 @@ struct CompactTerminalButton: View {
     }
 }
 
-// MARK: - Terminal Button
+// MARK: - Terminal Jump Button
+
+/// Button to jump to a terminal app, showing the terminal's icon and name
+struct TerminalJumpButton: View {
+    let iconName: String
+    let terminalName: String?
+    let onTap: () -> Void
+
+    var body: some View {
+        Button {
+            onTap()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: iconName)
+                    .font(.system(size: 9, weight: .medium))
+                Text(terminalName ?? "Terminal")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(.black)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(0.95))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Terminal Button (legacy)
 
 struct TerminalButton: View {
     let isEnabled: Bool

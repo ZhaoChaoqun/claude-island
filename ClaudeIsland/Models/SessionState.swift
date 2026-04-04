@@ -23,6 +23,9 @@ struct SessionState: Equatable, Identifiable, Sendable {
     var tty: String?
     var isInTmux: Bool
 
+    /// Resolved terminal application info (detected from process tree)
+    var resolvedTerminal: ResolvedTerminal?
+
     // MARK: - State Machine
 
     /// Current phase in the session lifecycle
@@ -71,6 +74,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         pid: Int? = nil,
         tty: String? = nil,
         isInTmux: Bool = false,
+        resolvedTerminal: ResolvedTerminal? = nil,
         phase: SessionPhase = .idle,
         chatItems: [ChatHistoryItem] = [],
         toolTracker: ToolTracker = ToolTracker(),
@@ -89,6 +93,7 @@ struct SessionState: Equatable, Identifiable, Sendable {
         self.pid = pid
         self.tty = tty
         self.isInTmux = isInTmux
+        self.resolvedTerminal = resolvedTerminal
         self.phase = phase
         self.chatItems = chatItems
         self.toolTracker = toolTracker
@@ -190,6 +195,23 @@ struct SessionState: Equatable, Identifiable, Sendable {
     /// Whether the session can be interacted with
     var canInteract: Bool {
         phase.needsAttention
+    }
+
+    // MARK: - Terminal Info Convenience
+
+    /// Display name of the terminal app (e.g. "iTerm2", "VS Code")
+    var terminalDisplayName: String? {
+        resolvedTerminal?.appInfo.displayName
+    }
+
+    /// SF Symbol icon for the terminal type
+    var terminalIconName: String {
+        resolvedTerminal?.appInfo.iconName ?? "terminal"
+    }
+
+    /// Whether we can jump to this session's terminal
+    var canJumpToTerminal: Bool {
+        resolvedTerminal != nil
     }
 }
 

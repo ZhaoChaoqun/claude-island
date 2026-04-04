@@ -95,8 +95,7 @@ actor YabaiController {
 
     /// Check if command is a terminal (nonisolated helper to avoid MainActor access)
     private nonisolated func isTerminalProcess(_ command: String) -> Bool {
-        let terminalCommands = ["Terminal", "iTerm", "iTerm2", "Alacritty", "kitty", "WezTerm", "wezterm-gui", "Hyper"]
-        return terminalCommands.contains { command.contains($0) }
+        TerminalAppRegistry.isTerminal(command)
     }
 
     private func focusTmuxPane(forWorkingDir workingDir: String, tree: [Int: ProcessInfo], windows: [YabaiWindow]) async -> Bool {
