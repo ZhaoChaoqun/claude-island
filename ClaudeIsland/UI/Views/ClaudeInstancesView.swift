@@ -95,7 +95,8 @@ struct ClaudeInstancesView: View {
             if let terminal = session.resolvedTerminal {
                 _ = await WindowFocuser.shared.focusTerminal(
                     info: terminal.appInfo,
-                    sessionPid: session.pid
+                    sessionPid: session.pid,
+                    cachedTTY: terminal.tty
                 )
                 return
             }

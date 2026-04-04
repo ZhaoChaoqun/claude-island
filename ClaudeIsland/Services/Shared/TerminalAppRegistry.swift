@@ -157,7 +157,7 @@ struct TerminalAppRegistry: Sendable {
         TerminalAppInfo(
             type: .vscode,
             bundleIds: ["com.microsoft.VSCode"],
-            processNames: ["Code", "Electron"],
+            processNames: ["Code"],
             iconName: "chevron.left.forwardslash.chevron.right",
             displayName: "VS Code",
             supportsTabFocus: false,

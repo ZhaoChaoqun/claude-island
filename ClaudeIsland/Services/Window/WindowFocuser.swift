@@ -25,31 +25,35 @@ actor WindowFocuser {
     /// Focus a terminal window by its bundle ID.
     /// This is the main entry point — works without yabai.
     func focusTerminalApp(bundleId: String) async -> Bool {
-        guard let app = NSWorkspace.shared.runningApplications.first(where: {
-            $0.bundleIdentifier == bundleId
-        }) else {
-            logger.debug("No running app with bundle ID: \(bundleId, privacy: .public)")
-            return false
-        }
+        // NSWorkspace and NSRunningApplication APIs require the main thread
+        return await MainActor.run {
+            guard let app = NSWorkspace.shared.runningApplications.first(where: {
+                $0.bundleIdentifier == bundleId
+            }) else {
+                logger.debug("No running app with bundle ID: \(bundleId, privacy: .public)")
+                return false
+            }
 
-        let activated = app.activate()
-        if activated {
-            logger.info("Activated app: \(bundleId, privacy: .public)")
-        } else {
-            logger.warning("Failed to activate app: \(bundleId, privacy: .public)")
+            let activated = app.activate()
+            if activated {
+                logger.info("Activated app: \(bundleId, privacy: .public)")
+            } else {
+                logger.warning("Failed to activate app: \(bundleId, privacy: .public)")
+            }
+            return activated
         }
-        return activated
     }
 
     /// Focus a terminal and try to target the correct tab/pane
     /// Strategy: AppleScript tab targeting → tmux pane switch → app activate fallback
-    func focusTerminal(info: TerminalAppInfo, sessionPid: Int?) async -> Bool {
+    func focusTerminal(info: TerminalAppInfo, sessionPid: Int?, cachedTTY: String? = nil) async -> Bool {
         // Step 1: Try AppleScript tab/pane targeting if supported and we have a PID
         if let pid = sessionPid, info.supportsTabFocus {
             let tabFocused = await focusTabByAppleScript(
                 terminalType: info.type,
                 bundleId: info.bundleIds.first ?? "",
-                claudePid: pid
+                claudePid: pid,
+                cachedTTY: cachedTTY
             )
             if tabFocused {
                 return true
@@ -60,12 +64,13 @@ actor WindowFocuser {
         if let pid = sessionPid {
             let tmuxFocused = await focusTmuxPane(claudePid: pid)
             if tmuxFocused {
-                // Also activate the terminal app window
+                // Also activate the terminal app window (best-effort, tmux pane already switched)
                 for bundleId in info.bundleIds {
                     if await focusTerminalApp(bundleId: bundleId) {
-                        return true
+                        break
                     }
                 }
+                return true
             }
         }
 
@@ -126,13 +131,14 @@ actor WindowFocuser {
     private func focusTabByAppleScript(
         terminalType: TerminalType,
         bundleId: String,
-        claudePid: Int
+        claudePid: Int,
+        cachedTTY: String? = nil
     ) async -> Bool {
         switch terminalType {
         case .terminalApp:
-            return await focusTerminalAppTab(claudePid: claudePid)
+            return await focusTerminalAppTab(claudePid: claudePid, cachedTTY: cachedTTY)
         case .iterm2:
-            return await focusITerm2Tab(claudePid: claudePid)
+            return await focusITerm2Tab(claudePid: claudePid, cachedTTY: cachedTTY)
         case .kitty:
             return await focusKittyWindow(claudePid: claudePid)
         default:
@@ -141,9 +147,9 @@ actor WindowFocuser {
     }
 
     /// Terminal.app: Find tab containing the Claude process's TTY
-    private func focusTerminalAppTab(claudePid: Int) async -> Bool {
-        // Find TTY for the Claude process
-        guard let tty = findTTY(forPid: claudePid) else {
+    private func focusTerminalAppTab(claudePid: Int, cachedTTY: String? = nil) async -> Bool {
+        // Use cached TTY if available, otherwise look it up (rebuilds process tree)
+        guard let tty = cachedTTY ?? findTTY(forPid: claudePid) else {
             logger.debug("No TTY found for pid \(claudePid)")
             return false
         }
@@ -171,9 +177,9 @@ actor WindowFocuser {
     }
 
     /// iTerm2: Find session containing the Claude process via TTY matching
-    private func focusITerm2Tab(claudePid: Int) async -> Bool {
-        let tty = findTTY(forPid: claudePid)
-        guard let ttyName = tty else {
+    private func focusITerm2Tab(claudePid: Int, cachedTTY: String? = nil) async -> Bool {
+        // Use cached TTY if available, otherwise look it up
+        guard let ttyName = cachedTTY ?? findTTY(forPid: claudePid) else {
             logger.debug("No TTY found for iTerm2 tab focus, pid \(claudePid)")
             return false
         }
@@ -232,22 +238,10 @@ actor WindowFocuser {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// Find TTY for a given PID by walking up the process tree
+    /// Find TTY for a given PID by walking up the process tree (fallback when no cached TTY)
     private nonisolated func findTTY(forPid pid: Int) -> String? {
         let tree = ProcessTreeBuilder.shared.buildTree()
-        var current = pid
-        var depth = 0
-
-        while current > 1 && depth < 20 {
-            guard let info = tree[current] else { break }
-            if let tty = info.tty {
-                return "/dev/\(tty)"
-            }
-            current = info.ppid
-            depth += 1
-        }
-
-        return nil
+        return ProcessTreeBuilder.shared.findTTY(forPid: pid, tree: tree)
     }
 
     /// Run an AppleScript and return whether it succeeded
