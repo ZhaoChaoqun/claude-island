@@ -25,7 +25,6 @@ struct CommandHighlightView: View {
         "mkfs",
         "dd if=",
         ":> /",
-        "> /dev/sd",
         "shutdown",
         "reboot",
         "kill -9",
@@ -35,6 +34,42 @@ struct CommandHighlightView: View {
         "fdisk",
     ]
 
+    /// Safe /dev/ targets that should NOT trigger the dangerous redirect warning.
+    /// Anything redirected to /dev/ that isn't in this list is flagged.
+    private static let safeDevTargets: Set<String> = [
+        "null", "zero", "random", "urandom",
+        "stdin", "stdout", "stderr",
+        "tty", "console", "full",
+    ]
+
+    /// Check if a line contains a dangerous redirect to /dev/ (block devices, etc.)
+    /// Matches `> /dev/X` but excludes known-safe targets like /dev/null, /dev/zero.
+    private static func hasDangerousDevRedirect(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        // Find all occurrences of "> /dev/"
+        var searchRange = lowered.startIndex..<lowered.endIndex
+        while let range = lowered.range(of: "> /dev/", range: searchRange) {
+            let afterPrefix = range.upperBound
+            guard afterPrefix < lowered.endIndex else {
+                // "> /dev/" at end of line — suspicious, flag it
+                return true
+            }
+            // Extract the device name (chars until whitespace, quote, or end)
+            let rest = lowered[afterPrefix...]
+            let deviceName = String(rest.prefix(while: { !$0.isWhitespace && $0 != "\"" && $0 != "'" && $0 != ";" && $0 != "|" && $0 != "&" }))
+            // Also handle /dev/pts/* as safe
+            if deviceName.hasPrefix("pts") {
+                // safe — skip
+            } else if safeDevTargets.contains(deviceName) {
+                // safe — skip
+            } else {
+                return true
+            }
+            searchRange = range.upperBound..<lowered.endIndex
+        }
+        return false
+    }
+
     /// Per-line danger cache: true if that line contains a dangerous pattern
     private let lineDangerFlags: [Bool]
 
@@ -43,9 +78,10 @@ struct CommandHighlightView: View {
 
         let lines = command.components(separatedBy: "\n")
         let flags = lines.map { line in
-            Self.dangerousPatterns.contains { pattern in
+            let matchesPattern = Self.dangerousPatterns.contains { pattern in
                 line.range(of: pattern, options: .caseInsensitive) != nil
             }
+            return matchesPattern || Self.hasDangerousDevRedirect(line)
         }
         self.lineDangerFlags = flags
         self.isDangerous = flags.contains(true)
