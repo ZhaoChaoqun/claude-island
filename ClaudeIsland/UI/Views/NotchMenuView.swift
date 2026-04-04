@@ -37,7 +37,13 @@ struct NotchMenuView: View {
 
             // Appearance settings
             ScreenPickerRow(screenSelector: screenSelector)
-            SoundPickerRow(soundSelector: soundSelector)
+
+            Divider()
+                .background(Color.white.opacity(0.08))
+                .padding(.vertical, 4)
+
+            // Sound settings — per-event-type configuration
+            SoundSettingsSection(soundSelector: soundSelector)
 
             Divider()
                 .background(Color.white.opacity(0.08))
