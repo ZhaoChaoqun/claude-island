@@ -22,6 +22,9 @@ struct ResolvedTerminal: Sendable, Equatable {
 
     /// Whether the session is inside tmux
     let isInTmux: Bool
+
+    /// Cached TTY device path (e.g. "/dev/ttys003") to avoid rebuilding the process tree on each jump
+    let tty: String?
 }
 
 /// Resolves which terminal application owns a Claude session
@@ -43,6 +46,9 @@ struct TerminalResolver: Sendable {
         // Check if in tmux
         let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: claudePid, tree: tree)
 
+        // Find TTY from the tree (cache it so we don't rebuild on each jump)
+        let tty = findTTY(forPid: claudePid, tree: tree)
+
         // Walk up process tree to find terminal app
         if let appInfo = TerminalAppRegistry.appInfo(forPid: claudePid, tree: tree) {
             // Verify the app is actually running and get its bundle ID
@@ -50,7 +56,8 @@ struct TerminalResolver: Sendable {
                 return ResolvedTerminal(
                     appInfo: appInfo,
                     bundleId: bundleId,
-                    isInTmux: isInTmux
+                    isInTmux: isInTmux,
+                    tty: tty
                 )
             }
         }
@@ -58,11 +65,11 @@ struct TerminalResolver: Sendable {
         // If we're in tmux, the terminal might not be a direct parent.
         // Try to find it via tmux client PID.
         if isInTmux {
-            return resolveViaTmuxClient(claudePid: claudePid, tree: tree)
+            return resolveViaTmuxClient(claudePid: claudePid, tree: tree, tty: tty)
         }
 
         // Last resort: check running applications against known terminals
-        return resolveFromRunningApps()
+        return resolveFromRunningApps(tty: tty)
     }
 
     /// Resolve terminal using TTY (when PID is not available)
@@ -89,13 +96,15 @@ struct TerminalResolver: Sendable {
     /// Walk up from a PID in a pre-built tree
     private nonisolated func resolveFromTree(pid: Int, tree: [Int: ProcessInfo]) -> ResolvedTerminal? {
         let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
+        let tty = findTTY(forPid: pid, tree: tree)
 
         if let appInfo = TerminalAppRegistry.appInfo(forPid: pid, tree: tree),
            let bundleId = findRunningBundleId(for: appInfo) {
             return ResolvedTerminal(
                 appInfo: appInfo,
                 bundleId: bundleId,
-                isInTmux: isInTmux
+                isInTmux: isInTmux,
+                tty: tty
             )
         }
 
@@ -103,7 +112,7 @@ struct TerminalResolver: Sendable {
     }
 
     /// Try to find the terminal via tmux client PID
-    private nonisolated func resolveViaTmuxClient(claudePid: Int, tree: [Int: ProcessInfo]) -> ResolvedTerminal? {
+    private nonisolated func resolveViaTmuxClient(claudePid: Int, tree: [Int: ProcessInfo], tty: String?) -> ResolvedTerminal? {
         // Find tmux server in the parent chain
         var current = claudePid
         var depth = 0
@@ -121,20 +130,22 @@ struct TerminalResolver: Sendable {
 
         guard let serverPid = tmuxServerPid else { return nil }
 
-        // Find tmux client processes (children of the server, or siblings)
-        // tmux clients are separate processes that connect to the server
+        // Find tmux client processes that belong to THIS server.
+        // tmux clients are spawned by the server, so ppid should match serverPid.
         for (pid, info) in tree {
-            // Look for tmux client processes
-            if info.command.lowercased().contains("tmux") && pid != serverPid {
-                // Walk up from this client to find the terminal
-                if let appInfo = TerminalAppRegistry.appInfo(forPid: pid, tree: tree),
-                   let bundleId = findRunningBundleId(for: appInfo) {
-                    return ResolvedTerminal(
-                        appInfo: appInfo,
-                        bundleId: bundleId,
-                        isInTmux: true
-                    )
-                }
+            guard pid != serverPid,
+                  info.ppid == serverPid,
+                  info.command.lowercased().hasPrefix("tmux") else { continue }
+
+            // Walk up from this client to find the terminal
+            if let appInfo = TerminalAppRegistry.appInfo(forPid: pid, tree: tree),
+               let bundleId = findRunningBundleId(for: appInfo) {
+                return ResolvedTerminal(
+                    appInfo: appInfo,
+                    bundleId: bundleId,
+                    isInTmux: true,
+                    tty: tty
+                )
             }
         }
 
@@ -144,8 +155,8 @@ struct TerminalResolver: Sendable {
     /// Fallback: check all running apps for known terminals.
     /// Only returns a result if exactly one terminal app is running,
     /// otherwise we can't determine which terminal owns this session.
-    private nonisolated func resolveFromRunningApps() -> ResolvedTerminal? {
-        let runningApps = NSWorkspace.shared.runningApplications
+    private nonisolated func resolveFromRunningApps(tty: String? = nil) -> ResolvedTerminal? {
+        let runningApps = Self.getRunningApps()
         var matches: [(appInfo: TerminalAppInfo, bundleId: String)] = []
 
         for app in runningApps {
@@ -164,18 +175,47 @@ struct TerminalResolver: Sendable {
         return ResolvedTerminal(
             appInfo: match.appInfo,
             bundleId: match.bundleId,
-            isInTmux: false
+            isInTmux: false,
+            tty: tty
         )
     }
 
     /// Find the bundle ID of a running instance for a terminal app
     private nonisolated func findRunningBundleId(for appInfo: TerminalAppInfo) -> String? {
-        let runningApps = NSWorkspace.shared.runningApplications
+        let runningApps = Self.getRunningApps()
         for bundleId in appInfo.bundleIds {
             if runningApps.contains(where: { $0.bundleIdentifier == bundleId }) {
                 return bundleId
             }
         }
+        return nil
+    }
+
+    /// Access NSWorkspace.shared.runningApplications safely from the main thread.
+    /// NSWorkspace APIs should be called on the main thread.
+    private nonisolated static func getRunningApps() -> [NSRunningApplication] {
+        if Thread.isMainThread {
+            return NSWorkspace.shared.runningApplications
+        }
+        return DispatchQueue.main.sync {
+            NSWorkspace.shared.runningApplications
+        }
+    }
+
+    /// Find TTY for a given PID by walking up a pre-built process tree
+    private nonisolated func findTTY(forPid pid: Int, tree: [Int: ProcessInfo]) -> String? {
+        var current = pid
+        var depth = 0
+
+        while current > 1 && depth < 20 {
+            guard let info = tree[current] else { break }
+            if let tty = info.tty {
+                return "/dev/\(tty)"
+            }
+            current = info.ppid
+            depth += 1
+        }
+
         return nil
     }
 }
