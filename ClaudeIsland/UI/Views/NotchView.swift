@@ -475,9 +475,18 @@ struct NotchView: View {
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
         if !newPendingIds.isEmpty {
-            // Play permission request sound for newly pending sessions
-            if soundSelector.hasSound(for: .permissionRequest) {
-                soundSelector.playSound(for: .permissionRequest)
+            // Play permission request sound (with suppression + focus check)
+            let isSuppressed = Date() < notificationSuppressedUntil
+            if !isSuppressed && soundSelector.hasSound(for: .permissionRequest) {
+                let newSessions = sessions.filter { newPendingIds.contains($0.stableId) }
+                Task {
+                    let shouldPlay = await shouldPlayNotificationSound(for: newSessions)
+                    if shouldPlay {
+                        await MainActor.run {
+                            soundSelector.playSound(for: .permissionRequest)
+                        }
+                    }
+                }
             }
 
             if viewModel.status == .closed &&
@@ -585,10 +594,22 @@ struct NotchView: View {
         let newQuestionIds = currentIds.subtracting(previousQuestionIds)
 
         if !newQuestionIds.isEmpty {
-            // Skip if within suppression window
             let isSuppressed = Date() < notificationSuppressedUntil
-            if !isSuppressed && soundSelector.hasSound(for: .questionWaiting) {
-                soundSelector.playSound(for: .questionWaiting)
+            // Filter out sessions with active subagents
+            let genuineSessions = questionSessions.filter { session in
+                guard newQuestionIds.contains(session.stableId) else { return false }
+                return !session.subagentState.hasActiveSubagent
+            }
+
+            if !isSuppressed && !genuineSessions.isEmpty && soundSelector.hasSound(for: .questionWaiting) {
+                Task {
+                    let shouldPlay = await shouldPlayNotificationSound(for: genuineSessions)
+                    if shouldPlay {
+                        await MainActor.run {
+                            soundSelector.playSound(for: .questionWaiting)
+                        }
+                    }
+                }
             }
         }
 
@@ -602,10 +623,18 @@ struct NotchView: View {
         let newEndedIds = currentIds.subtracting(previousEndedIds)
 
         if !newEndedIds.isEmpty {
-            // Skip if within suppression window
             let isSuppressed = Date() < notificationSuppressedUntil
-            if !isSuppressed && soundSelector.hasSound(for: .sessionEnded) {
-                soundSelector.playSound(for: .sessionEnded)
+            let newSessions = endedSessions.filter { newEndedIds.contains($0.stableId) }
+
+            if !isSuppressed && !newSessions.isEmpty && soundSelector.hasSound(for: .sessionEnded) {
+                Task {
+                    let shouldPlay = await shouldPlayNotificationSound(for: newSessions)
+                    if shouldPlay {
+                        await MainActor.run {
+                            soundSelector.playSound(for: .sessionEnded)
+                        }
+                    }
+                }
             }
         }
 

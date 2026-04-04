@@ -164,15 +164,19 @@ enum NotificationSound: String, CaseIterable {
 
 enum CustomSoundsManager {
     /// Directory where imported custom sounds are stored
-    static var customSoundsDirectory: URL {
+    static let customSoundsDirectory: URL = {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let dir = appSupport.appendingPathComponent("ClaudeIsland/CustomSounds")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+        return appSupport.appendingPathComponent("ClaudeIsland/CustomSounds")
+    }()
+
+    /// Ensure the custom sounds directory exists (called before writes)
+    private static func ensureDirectoryExists() {
+        try? FileManager.default.createDirectory(at: customSoundsDirectory, withIntermediateDirectories: true)
     }
 
     /// Import a sound file into the app's sandbox, returns the new URL and display name
     static func importSound(from sourceURL: URL) -> (URL, String)? {
+        ensureDirectoryExists()
         let fileName = sourceURL.lastPathComponent
         let displayName = sourceURL.deletingPathExtension().lastPathComponent
         let destinationURL = customSoundsDirectory.appendingPathComponent(fileName)
