@@ -270,7 +270,7 @@ actor ConversationParser {
         }
 
         var state = incrementalState[sessionId] ?? IncrementalParseState()
-        let newMessages = parseNewLines(filePath: sessionFile, state: &state)
+        _ = parseNewLines(filePath: sessionFile, state: &state)
         incrementalState[sessionId] = state
 
         // parseNewLines returns only NEW messages since last call,
