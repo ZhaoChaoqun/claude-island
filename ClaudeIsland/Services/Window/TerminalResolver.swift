@@ -34,6 +34,11 @@ struct TerminalResolver: Sendable {
     /// Walks up the process tree to find the terminal app, then verifies it's running
     nonisolated func resolve(claudePid: Int) -> ResolvedTerminal? {
         let tree = ProcessTreeBuilder.shared.buildTree()
+        return resolve(claudePid: claudePid, tree: tree)
+    }
+
+    /// Resolve terminal using a pre-built process tree (avoids duplicate sysctl calls)
+    nonisolated func resolve(claudePid: Int, tree: [Int: ProcessInfo]) -> ResolvedTerminal? {
 
         // Check if in tmux
         let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: claudePid, tree: tree)
@@ -136,23 +141,31 @@ struct TerminalResolver: Sendable {
         return nil
     }
 
-    /// Fallback: check all running apps for known terminals
+    /// Fallback: check all running apps for known terminals.
+    /// Only returns a result if exactly one terminal app is running,
+    /// otherwise we can't determine which terminal owns this session.
     private nonisolated func resolveFromRunningApps() -> ResolvedTerminal? {
         let runningApps = NSWorkspace.shared.runningApplications
+        var matches: [(appInfo: TerminalAppInfo, bundleId: String)] = []
+
         for app in runningApps {
             guard let bundleId = app.bundleIdentifier,
                   let appInfo = TerminalAppRegistry.appInfo(forBundleId: bundleId) else {
                 continue
             }
-
-            // If there's exactly one terminal running, it's probably the right one
-            return ResolvedTerminal(
-                appInfo: appInfo,
-                bundleId: bundleId,
-                isInTmux: false
-            )
+            matches.append((appInfo: appInfo, bundleId: bundleId))
         }
-        return nil
+
+        // Only return if exactly one terminal is running — ambiguous otherwise
+        guard matches.count == 1, let match = matches.first else {
+            return nil
+        }
+
+        return ResolvedTerminal(
+            appInfo: match.appInfo,
+            bundleId: match.bundleId,
+            isInTmux: false
+        )
     }
 
     /// Find the bundle ID of a running instance for a terminal app

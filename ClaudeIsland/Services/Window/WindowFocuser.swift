@@ -148,10 +148,12 @@ actor WindowFocuser {
             return false
         }
 
+        let escapedTTY = escapeForAppleScript(tty)
+
         let script = """
         tell application "Terminal"
             activate
-            set targetTTY to "\(tty)"
+            set targetTTY to "\(escapedTTY)"
             repeat with w in windows
                 repeat with t in tabs of w
                     if tty of t is targetTTY then
@@ -168,15 +170,15 @@ actor WindowFocuser {
         return await runAppleScript(script)
     }
 
-    /// iTerm2: Find session containing the Claude process via PID tracking
+    /// iTerm2: Find session containing the Claude process via TTY matching
     private func focusITerm2Tab(claudePid: Int) async -> Bool {
-        // iTerm2's AppleScript can iterate sessions and check PIDs
-        // We look for a session whose child processes include our Claude PID
         let tty = findTTY(forPid: claudePid)
         guard let ttyName = tty else {
             logger.debug("No TTY found for iTerm2 tab focus, pid \(claudePid)")
             return false
         }
+
+        let escapedTTY = escapeForAppleScript(ttyName)
 
         let script = """
         tell application "iTerm2"
@@ -184,7 +186,7 @@ actor WindowFocuser {
             repeat with w in windows
                 repeat with t in tabs of w
                     repeat with s in sessions of t
-                        if tty of s is "\(ttyName)" then
+                        if tty of s is "\(escapedTTY)" then
                             select t
                             select s
                             return true
@@ -199,20 +201,21 @@ actor WindowFocuser {
         return await runAppleScript(script)
     }
 
-    /// Kitty: Use kitten command for window focus
+    /// Kitty: Use remote control protocol for window focus
     private func focusKittyWindow(claudePid: Int) async -> Bool {
-        // Kitty uses its own remote control protocol
-        // `kitty @ focus-window --match pid:<pid>` can focus by PID
         let kittyPaths = ["/opt/homebrew/bin/kitty", "/usr/local/bin/kitty"]
         for kittyPath in kittyPaths {
             guard FileManager.default.isExecutableFile(atPath: kittyPath) else { continue }
 
-            do {
-                _ = try await ProcessExecutor.shared.run(kittyPath, arguments: [
-                    "@", "focus-window", "--match", "pid:\(claudePid)"
-                ])
+            let result = await ProcessExecutor.shared.runWithResult(kittyPath, arguments: [
+                "@", "focus-window", "--match", "pid:\(claudePid)"
+            ])
+            switch result {
+            case .success(let output) where output.isSuccess:
                 return true
-            } catch {
+            case .success(let output):
+                logger.debug("Kitty remote control exited with code \(output.exitCode)")
+            case .failure(let error):
                 logger.debug("Kitty remote control failed: \(error.localizedDescription, privacy: .public)")
             }
         }
@@ -220,6 +223,14 @@ actor WindowFocuser {
     }
 
     // MARK: - Helpers
+
+    /// Escape a string for safe interpolation into AppleScript string literals.
+    /// Prevents injection via crafted TTY paths containing `"` or `\`.
+    private nonisolated func escapeForAppleScript(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
 
     /// Find TTY for a given PID by walking up the process tree
     private nonisolated func findTTY(forPid pid: Int) -> String? {

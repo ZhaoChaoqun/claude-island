@@ -138,9 +138,9 @@ actor SessionStore {
             let tree = ProcessTreeBuilder.shared.buildTree()
             session.isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
 
-            // Resolve terminal app if not already resolved
+            // Resolve terminal app if not already resolved (reuse the tree we just built)
             if session.resolvedTerminal == nil {
-                session.resolvedTerminal = TerminalResolver.shared.resolve(claudePid: pid)
+                session.resolvedTerminal = TerminalResolver.shared.resolve(claudePid: pid, tree: tree)
                 if let terminal = session.resolvedTerminal {
                     Self.logger.debug("Resolved terminal: \(terminal.appInfo.displayName, privacy: .public) for session \(sessionId.prefix(8), privacy: .public)")
                     // Update isInTmux from resolved terminal (more accurate)
