@@ -115,6 +115,16 @@ struct TerminalResolver: Sendable {
     }
 
     /// Try to find the terminal via tmux client PID
+    ///
+    /// tmux process model:
+    ///   Terminal → shell → tmux (client) --[socket]--> tmux (server) → shell → claude
+    ///
+    /// The client's ppid is the shell that launched it, NOT the server.
+    /// The server's children are pane shells, NOT clients.
+    /// So we match tmux processes by name (hasPrefix("tmux")) excluding the server PID,
+    /// then walk up from each candidate to find a terminal app in its ancestry.
+    /// The terminal-in-ancestry check naturally filters out the server's child panes
+    /// (which have shells, not terminals, as ancestors).
     private nonisolated func resolveViaTmuxClient(claudePid: Int, tree: [Int: ProcessInfo], tty: String?, apps: [NSRunningApplication]) -> ResolvedTerminal? {
         // Find tmux server in the parent chain
         var current = claudePid
@@ -133,14 +143,16 @@ struct TerminalResolver: Sendable {
 
         guard let serverPid = tmuxServerPid else { return nil }
 
-        // Find tmux client processes that belong to THIS server.
-        // tmux clients are spawned by the server, so ppid should match serverPid.
+        // Find tmux client processes.
+        // Clients connect to the server via socket — they are NOT children of the server.
+        // We identify candidates by: tmux process name + not the server itself.
+        // The appInfo(forPid:) walk-up ensures we only match processes that have a
+        // terminal app in their ancestry (filtering out server child panes).
         for (pid, info) in tree {
             guard pid != serverPid,
-                  info.ppid == serverPid,
                   info.command.lowercased().hasPrefix("tmux") else { continue }
 
-            // Walk up from this client to find the terminal
+            // Walk up from this candidate to find a terminal app
             if let appInfo = TerminalAppRegistry.appInfo(forPid: pid, tree: tree),
                let bundleId = findRunningBundleId(for: appInfo, apps: apps) {
                 return ResolvedTerminal(
