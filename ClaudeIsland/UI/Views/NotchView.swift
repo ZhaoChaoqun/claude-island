@@ -40,6 +40,11 @@ struct NotchView: View {
         sessionMonitor.instances.contains { $0.phase.isWaitingForApproval }
     }
 
+    /// Whether any Claude session has a pending question (AskUserQuestion)
+    private var hasPendingQuestion: Bool {
+        sessionMonitor.instances.contains { $0.phase.isWaitingForAnswer }
+    }
+
     /// Whether any Claude session is waiting for user input (done/ready state) within the display window
     private var hasWaitingForInput: Bool {
         let now = Date()
@@ -66,23 +71,23 @@ struct NotchView: View {
 
     /// Extra width for expanding activities (like Dynamic Island)
     private var expansionWidth: CGFloat {
-        // Permission indicator adds width on left side only
-        let permissionIndicatorWidth: CGFloat = hasPendingPermission ? 18 : 0
+        // Permission/question indicator adds width on left side only
+        let indicatorWidth: CGFloat = (hasPendingPermission || hasPendingQuestion) ? 18 : 0
 
         // Expand for processing activity
         if activityCoordinator.expandingActivity.show {
             switch activityCoordinator.expandingActivity.type {
             case .claude:
                 let baseWidth = 2 * max(0, closedNotchSize.height - 12) + 20
-                return baseWidth + permissionIndicatorWidth
+                return baseWidth + indicatorWidth
             case .none:
                 break
             }
         }
 
-        // Expand for pending permissions (left indicator) or waiting for input (checkmark on right)
-        if hasPendingPermission {
-            return 2 * max(0, closedNotchSize.height - 12) + 20 + permissionIndicatorWidth
+        // Expand for pending permissions/questions (left indicator) or waiting for input (checkmark on right)
+        if hasPendingPermission || hasPendingQuestion {
+            return 2 * max(0, closedNotchSize.height - 12) + 20 + indicatorWidth
         }
 
         // Waiting for input just shows checkmark on right, no extra left indicator
@@ -171,6 +176,7 @@ struct NotchView: View {
                     .animation(openAnimation, value: notchSize) // Animate container size changes between content types
                     .animation(.smooth, value: activityCoordinator.expandingActivity)
                     .animation(.smooth, value: hasPendingPermission)
+                    .animation(.smooth, value: hasPendingQuestion)
                     .animation(.smooth, value: hasWaitingForInput)
                     .animation(.spring(response: 0.3, dampingFraction: 0.5), value: isBouncing)
                     .contentShape(Rectangle())
@@ -214,9 +220,9 @@ struct NotchView: View {
         activityCoordinator.expandingActivity.show && activityCoordinator.expandingActivity.type == .claude
     }
 
-    /// Whether to show the expanded closed state (processing, pending permission, or waiting for input)
+    /// Whether to show the expanded closed state (processing, pending permission/question, or waiting for input)
     private var showClosedActivity: Bool {
-        isProcessing || hasPendingPermission || hasWaitingForInput
+        isProcessing || hasPendingPermission || hasPendingQuestion || hasWaitingForInput
     }
 
     @ViewBuilder
@@ -253,13 +259,19 @@ struct NotchView: View {
                     ClaudeCrabIcon(size: 14, animateLegs: isProcessing)
                         .matchedGeometryEffect(id: "crab", in: activityNamespace, isSource: showClosedActivity)
 
-                    // Permission indicator only (amber) - waiting for input shows checkmark on right
+                    // Permission/question indicator (amber) - waiting for input shows checkmark on right
                     if hasPendingPermission {
                         PermissionIndicatorIcon(size: 14, color: Color(red: 0.85, green: 0.47, blue: 0.34))
                             .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
+                    } else if hasPendingQuestion {
+                        // Question mark indicator for pending questions
+                        Text("?")
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(TerminalColors.amber)
+                            .matchedGeometryEffect(id: "status-indicator", in: activityNamespace, isSource: showClosedActivity)
                     }
                 }
-                .frame(width: viewModel.status == .opened ? nil : sideWidth + (hasPendingPermission ? 18 : 0))
+                .frame(width: viewModel.status == .opened ? nil : sideWidth + ((hasPendingPermission || hasPendingQuestion) ? 18 : 0))
                 .padding(.leading, viewModel.status == .opened ? 8 : 0)
             }
 
@@ -279,10 +291,17 @@ struct NotchView: View {
                     .frame(width: closedNotchSize.width - cornerRadiusInsets.closed.top + (isBouncing ? 16 : 0))
             }
 
-            // Right side - spinner when processing/pending, checkmark when waiting for input
+            // Right side - spinner when processing/pending, question mark for questions, checkmark when waiting for input
             if showClosedActivity {
                 if isProcessing || hasPendingPermission {
                     ProcessingSpinner()
+                        .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
+                        .frame(width: viewModel.status == .opened ? 20 : sideWidth)
+                } else if hasPendingQuestion {
+                    // Pulsing question mark for pending questions
+                    Text("?")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(TerminalColors.amber)
                         .matchedGeometryEffect(id: "spinner", in: activityNamespace, isSource: showClosedActivity)
                         .frame(width: viewModel.status == .opened ? 20 : sideWidth)
                 } else if hasWaitingForInput {
@@ -364,6 +383,26 @@ struct NotchView: View {
                     sessionMonitor: sessionMonitor,
                     viewModel: viewModel
                 )
+            case .question(let session):
+                if let ctx = session.activeQuestion {
+                    QuestionView(
+                        question: ctx,
+                        onAnswer: { answers in
+                            sessionMonitor.answerQuestion(
+                                sessionId: session.sessionId,
+                                answers: answers
+                            )
+                            // Return to instances list after answering
+                            viewModel.exitChat()
+                        }
+                    )
+                } else {
+                    // Question was answered externally, show instances
+                    ClaudeInstancesView(
+                        sessionMonitor: sessionMonitor,
+                        viewModel: viewModel
+                    )
+                }
             }
         }
         .frame(width: notchSize.width - 24) // Fixed width to prevent text reflow
@@ -373,8 +412,8 @@ struct NotchView: View {
     // MARK: - Event Handlers
 
     private func handleProcessingChange() {
-        if isAnyProcessing || hasPendingPermission {
-            // Show claude activity when processing or waiting for permission
+        if isAnyProcessing || hasPendingPermission || hasPendingQuestion {
+            // Show claude activity when processing, waiting for permission, or waiting for answer
             activityCoordinator.showActivity(type: .claude)
             isVisible = true
 
@@ -399,7 +438,7 @@ struct NotchView: View {
             // Don't hide on non-notched devices - users need a visible target
             if viewModel.status == .closed && viewModel.hasPhysicalNotch {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    if !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && viewModel.status == .closed {
+                    if !isAnyProcessing && !hasPendingPermission && !hasPendingQuestion && !hasWaitingForInput && viewModel.status == .closed {
                         isVisible = false
                     }
                 }
@@ -419,7 +458,7 @@ struct NotchView: View {
             // Don't hide on non-notched devices - users need a visible target
             guard viewModel.hasPhysicalNotch else { return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasWaitingForInput && !activityCoordinator.expandingActivity.show {
+                if viewModel.status == .closed && !isAnyProcessing && !hasPendingPermission && !hasPendingQuestion && !hasWaitingForInput && !activityCoordinator.expandingActivity.show {
                     isVisible = false
                 }
             }

@@ -63,6 +63,14 @@ actor SessionStore {
         case .permissionSocketFailed(let sessionId, let toolUseId):
             await processSocketFailure(sessionId: sessionId, toolUseId: toolUseId)
 
+        // MARK: - Question Events
+
+        case .questionAnswered(let sessionId, let toolUseId, let answers):
+            await processQuestionAnswered(sessionId: sessionId, toolUseId: toolUseId, answers: answers)
+
+        case .questionSocketFailed(let sessionId, let toolUseId):
+            await processQuestionSocketFailure(sessionId: sessionId, toolUseId: toolUseId)
+
         case .fileUpdated(let payload):
             await processFileUpdate(payload)
 
@@ -487,6 +495,32 @@ actor SessionStore {
                 // The failed tool wasn't in phase context, but no others pending
                 session.phase = .idle
             }
+        }
+
+        sessions[sessionId] = session
+    }
+
+    // MARK: - Question Processing
+
+    private func processQuestionAnswered(sessionId: String, toolUseId: String, answers: [String: String]) async {
+        guard var session = sessions[sessionId] else { return }
+
+        // Transition to processing - Claude will continue after receiving the answer
+        if case .waitingForAnswer(let ctx) = session.phase, ctx.toolUseId == toolUseId {
+            if session.phase.canTransition(to: .processing) {
+                session.phase = .processing
+            }
+        }
+
+        sessions[sessionId] = session
+    }
+
+    private func processQuestionSocketFailure(sessionId: String, toolUseId: String) async {
+        guard var session = sessions[sessionId] else { return }
+
+        // Socket died - clear the question state
+        if case .waitingForAnswer(let ctx) = session.phase, ctx.toolUseId == toolUseId {
+            session.phase = .idle
         }
 
         sessions[sessionId] = session
@@ -1018,6 +1052,15 @@ actor SessionStore {
     func hasActivePermission(sessionId: String) -> Bool {
         guard let session = sessions[sessionId] else { return false }
         if case .waitingForApproval = session.phase {
+            return true
+        }
+        return false
+    }
+
+    /// Check if there's an active question for a session
+    func hasActiveQuestion(sessionId: String) -> Bool {
+        guard let session = sessions[sessionId] else { return false }
+        if case .waitingForAnswer = session.phase {
             return true
         }
         return false

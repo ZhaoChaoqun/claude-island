@@ -3,7 +3,7 @@
 //  ClaudeIsland
 //
 //  Unix domain socket server for real-time hook events
-//  Supports request/response for permission decisions
+//  Supports request/response for permission decisions and question answers
 //
 
 import Foundation
@@ -65,6 +65,13 @@ struct HookEvent: Codable, Sendable {
                 toolInput: toolInput,
                 receivedAt: Date()
             ))
+        case "waiting_for_answer":
+            return .waitingForAnswer(QuestionContext(
+                toolUseId: toolUseId ?? "",
+                questions: parseQuestions(from: toolInput),
+                rawToolInput: toolInput,
+                receivedAt: Date()
+            ))
         case "waiting_for_input":
             return .waitingForInput
         case "running_tool", "processing", "starting":
@@ -79,6 +86,11 @@ struct HookEvent: Codable, Sendable {
     /// Whether this event expects a response (permission request)
     nonisolated var expectsResponse: Bool {
         event == "PermissionRequest" && status == "waiting_for_approval"
+    }
+
+    /// Whether this event expects a question answer (AskUserQuestion via PreToolUse)
+    nonisolated var expectsQuestionResponse: Bool {
+        event == "PreToolUse" && status == "waiting_for_answer" && tool == "AskUserQuestion"
     }
 }
 
@@ -97,11 +109,28 @@ struct PendingPermission: Sendable {
     let receivedAt: Date
 }
 
+/// Pending question waiting for user answer
+struct PendingQuestion: Sendable {
+    let sessionId: String
+    let toolUseId: String
+    let clientSocket: Int32
+    let event: HookEvent
+    let receivedAt: Date
+}
+
+/// Response to send back to the hook for question answers
+struct QuestionAnswerResponse: Codable {
+    let answers: [String: String]
+}
+
 /// Callback for hook events
 typealias HookEventHandler = @Sendable (HookEvent) -> Void
 
 /// Callback for permission response failures (socket died)
 typealias PermissionFailureHandler = @Sendable (_ sessionId: String, _ toolUseId: String) -> Void
+
+/// Callback for question answer failures (socket died)
+typealias QuestionFailureHandler = @Sendable (_ sessionId: String, _ toolUseId: String) -> Void
 
 /// Unix domain socket server that receives events from Claude Code hooks
 /// Uses GCD DispatchSource for non-blocking I/O
@@ -113,11 +142,16 @@ class HookSocketServer {
     private var acceptSource: DispatchSourceRead?
     private var eventHandler: HookEventHandler?
     private var permissionFailureHandler: PermissionFailureHandler?
+    private var questionFailureHandler: QuestionFailureHandler?
     private let queue = DispatchQueue(label: "com.claudeisland.socket", qos: .userInitiated)
 
     /// Pending permission requests indexed by toolUseId
     private var pendingPermissions: [String: PendingPermission] = [:]
     private let permissionsLock = NSLock()
+
+    /// Pending questions indexed by toolUseId
+    private var pendingQuestions: [String: PendingQuestion] = [:]
+    private let questionsLock = NSLock()
 
     /// Cache tool_use_id from PreToolUse to correlate with PermissionRequest
     /// Key: "sessionId:toolName:serializedInput" -> Queue of tool_use_ids (FIFO)
@@ -128,17 +162,18 @@ class HookSocketServer {
     private init() {}
 
     /// Start the socket server
-    func start(onEvent: @escaping HookEventHandler, onPermissionFailure: PermissionFailureHandler? = nil) {
+    func start(onEvent: @escaping HookEventHandler, onPermissionFailure: PermissionFailureHandler? = nil, onQuestionFailure: QuestionFailureHandler? = nil) {
         queue.async { [weak self] in
-            self?.startServer(onEvent: onEvent, onPermissionFailure: onPermissionFailure)
+            self?.startServer(onEvent: onEvent, onPermissionFailure: onPermissionFailure, onQuestionFailure: onQuestionFailure)
         }
     }
 
-    private func startServer(onEvent: @escaping HookEventHandler, onPermissionFailure: PermissionFailureHandler?) {
+    private func startServer(onEvent: @escaping HookEventHandler, onPermissionFailure: PermissionFailureHandler?, onQuestionFailure: QuestionFailureHandler?) {
         guard serverSocket < 0 else { return }
 
         eventHandler = onEvent
         permissionFailureHandler = onPermissionFailure
+        questionFailureHandler = onQuestionFailure
 
         unlink(Self.socketPath)
 
@@ -210,6 +245,13 @@ class HookSocketServer {
         }
         pendingPermissions.removeAll()
         permissionsLock.unlock()
+
+        questionsLock.lock()
+        for (_, pending) in pendingQuestions {
+            close(pending.clientSocket)
+        }
+        pendingQuestions.removeAll()
+        questionsLock.unlock()
     }
 
     /// Respond to a pending permission request by toolUseId
@@ -257,6 +299,36 @@ class HookSocketServer {
         }
     }
 
+    // MARK: - Question Methods
+
+    /// Respond to a pending question with user's answers
+    func respondToQuestion(toolUseId: String, answers: [String: String]) {
+        queue.async { [weak self] in
+            self?.sendQuestionResponse(toolUseId: toolUseId, answers: answers)
+        }
+    }
+
+    /// Cancel all pending questions for a session
+    func cancelPendingQuestions(sessionId: String) {
+        queue.async { [weak self] in
+            self?.cleanupPendingQuestions(sessionId: sessionId)
+        }
+    }
+
+    /// Cancel a specific pending question by toolUseId
+    func cancelPendingQuestion(toolUseId: String) {
+        queue.async { [weak self] in
+            self?.cleanupSpecificQuestion(toolUseId: toolUseId)
+        }
+    }
+
+    /// Check if there's a pending question for a session
+    func hasPendingQuestion(sessionId: String) -> Bool {
+        questionsLock.lock()
+        defer { questionsLock.unlock() }
+        return pendingQuestions.values.contains { $0.sessionId == sessionId }
+    }
+
     private func cleanupSpecificPermission(toolUseId: String) {
         permissionsLock.lock()
         guard let pending = pendingPermissions.removeValue(forKey: toolUseId) else {
@@ -278,6 +350,29 @@ class HookSocketServer {
             pendingPermissions.removeValue(forKey: toolUseId)
         }
         permissionsLock.unlock()
+    }
+
+    private func cleanupPendingQuestions(sessionId: String) {
+        questionsLock.lock()
+        let matching = pendingQuestions.filter { $0.value.sessionId == sessionId }
+        for (toolUseId, pending) in matching {
+            logger.debug("Cleaning up stale question for \(sessionId.prefix(8), privacy: .public) tool:\(toolUseId.prefix(12), privacy: .public)")
+            close(pending.clientSocket)
+            pendingQuestions.removeValue(forKey: toolUseId)
+        }
+        questionsLock.unlock()
+    }
+
+    private func cleanupSpecificQuestion(toolUseId: String) {
+        questionsLock.lock()
+        guard let pending = pendingQuestions.removeValue(forKey: toolUseId) else {
+            questionsLock.unlock()
+            return
+        }
+        questionsLock.unlock()
+
+        logger.debug("Question completed externally, closing socket for \(pending.sessionId.prefix(8), privacy: .public) tool:\(toolUseId.prefix(12), privacy: .public)")
+        close(pending.clientSocket)
     }
 
     // MARK: - Tool Use ID Cache
@@ -434,6 +529,32 @@ class HookSocketServer {
             cleanupCache(sessionId: event.sessionId)
         }
 
+        // Handle AskUserQuestion - keep socket open for answer
+        if event.expectsQuestionResponse {
+            guard let toolUseId = event.toolUseId else {
+                logger.warning("Question event missing tool_use_id for \(event.sessionId.prefix(8), privacy: .public)")
+                close(clientSocket)
+                eventHandler?(event)
+                return
+            }
+
+            logger.debug("Question request - keeping socket open for \(event.sessionId.prefix(8), privacy: .public) tool:\(toolUseId.prefix(12), privacy: .public)")
+
+            let pending = PendingQuestion(
+                sessionId: event.sessionId,
+                toolUseId: toolUseId,
+                clientSocket: clientSocket,
+                event: event,
+                receivedAt: Date()
+            )
+            questionsLock.lock()
+            pendingQuestions[toolUseId] = pending
+            questionsLock.unlock()
+
+            eventHandler?(event)
+            return
+        }
+
         if event.expectsResponse {
             let toolUseId: String
             if let eventToolUseId = event.toolUseId {
@@ -515,6 +636,47 @@ class HookSocketServer {
         }
 
         close(pending.clientSocket)
+    }
+
+    private func sendQuestionResponse(toolUseId: String, answers: [String: String]) {
+        questionsLock.lock()
+        guard let pending = pendingQuestions.removeValue(forKey: toolUseId) else {
+            questionsLock.unlock()
+            logger.debug("No pending question for toolUseId: \(toolUseId.prefix(12), privacy: .public)")
+            return
+        }
+        questionsLock.unlock()
+
+        let response = QuestionAnswerResponse(answers: answers)
+        guard let data = try? JSONEncoder().encode(response) else {
+            close(pending.clientSocket)
+            questionFailureHandler?(pending.sessionId, toolUseId)
+            return
+        }
+
+        let age = Date().timeIntervalSince(pending.receivedAt)
+        logger.info("Sending question answer for \(pending.sessionId.prefix(8), privacy: .public) tool:\(toolUseId.prefix(12), privacy: .public) (age: \(String(format: "%.1f", age), privacy: .public)s)")
+
+        var writeSuccess = false
+        data.withUnsafeBytes { bytes in
+            guard let baseAddress = bytes.baseAddress else {
+                logger.error("Failed to get data buffer address")
+                return
+            }
+            let result = write(pending.clientSocket, baseAddress, data.count)
+            if result < 0 {
+                logger.error("Question write failed with errno: \(errno)")
+            } else {
+                logger.debug("Question write succeeded: \(result) bytes")
+                writeSuccess = true
+            }
+        }
+
+        close(pending.clientSocket)
+
+        if !writeSuccess {
+            questionFailureHandler?(pending.sessionId, toolUseId)
+        }
     }
 
     private func sendPermissionResponseBySession(sessionId: String, decision: String, reason: String?) {

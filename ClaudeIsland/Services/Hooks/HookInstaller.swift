@@ -103,7 +103,7 @@ struct HookInstaller {
 
         let hookEvents: [(String, [[String: Any]])] = [
             ("UserPromptSubmit", withoutMatcher),
-            ("PreToolUse", withMatcher),
+            ("PreToolUse", withMatcherAndTimeout),
             ("PostToolUse", withMatcher),
             ("PermissionRequest", withMatcherAndTimeout),
             ("Notification", withMatcher),

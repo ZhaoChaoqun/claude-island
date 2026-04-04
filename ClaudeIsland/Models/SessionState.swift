@@ -114,6 +114,14 @@ struct SessionState: Equatable, Identifiable, Sendable {
         return nil
     }
 
+    /// The active question context, if any
+    var activeQuestion: QuestionContext? {
+        if case .waitingForAnswer(let ctx) = phase {
+            return ctx
+        }
+        return nil
+    }
+
     // MARK: - UI Convenience Properties
 
     /// Stable identity for SwiftUI (combines PID and sessionId for animation stability)

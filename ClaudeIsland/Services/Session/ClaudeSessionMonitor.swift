@@ -54,16 +54,25 @@ class ClaudeSessionMonitor: ObservableObject {
 
                 if event.event == "Stop" {
                     HookSocketServer.shared.cancelPendingPermissions(sessionId: event.sessionId)
+                    HookSocketServer.shared.cancelPendingQuestions(sessionId: event.sessionId)
                 }
 
                 if event.event == "PostToolUse", let toolUseId = event.toolUseId {
                     HookSocketServer.shared.cancelPendingPermission(toolUseId: toolUseId)
+                    HookSocketServer.shared.cancelPendingQuestion(toolUseId: toolUseId)
                 }
             },
             onPermissionFailure: { sessionId, toolUseId in
                 Task {
                     await SessionStore.shared.process(
                         .permissionSocketFailed(sessionId: sessionId, toolUseId: toolUseId)
+                    )
+                }
+            },
+            onQuestionFailure: { sessionId, toolUseId in
+                Task {
+                    await SessionStore.shared.process(
+                        .questionSocketFailed(sessionId: sessionId, toolUseId: toolUseId)
                     )
                 }
             }
@@ -117,6 +126,27 @@ class ClaudeSessionMonitor: ObservableObject {
     func archiveSession(sessionId: String) {
         Task {
             await SessionStore.shared.process(.sessionEnded(sessionId: sessionId))
+        }
+    }
+
+    // MARK: - Question Handling
+
+    /// Answer a question from AskUserQuestion tool
+    func answerQuestion(sessionId: String, answers: [String: String]) {
+        Task {
+            guard let session = await SessionStore.shared.session(for: sessionId),
+                  let question = session.activeQuestion else {
+                return
+            }
+
+            HookSocketServer.shared.respondToQuestion(
+                toolUseId: question.toolUseId,
+                answers: answers
+            )
+
+            await SessionStore.shared.process(
+                .questionAnswered(sessionId: sessionId, toolUseId: question.toolUseId, answers: answers)
+            )
         }
     }
 
