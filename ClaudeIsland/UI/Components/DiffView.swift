@@ -190,11 +190,20 @@ struct ApprovalDiffView: View {
 
     // MARK: - Diff Computation
 
+    /// Maximum line count for LCS diff. Beyond this, fall back to simple all-removed/all-added
+    /// to avoid O(m×n) memory and CPU cost on large inputs.
+    private static let lcsLineThreshold = 200
+
     /// Compute diff for Edit tool (old_string → new_string) with line-level comparison.
-    /// Uses a simple LCS-based approach: identical lines become context, others are removed/added.
+    /// Uses LCS for small inputs; falls back to simple diff for large inputs.
     private static func computeEditDiff(old: String, new: String) -> [DiffLine] {
         let oldLines = old.components(separatedBy: "\n")
         let newLines = new.components(separatedBy: "\n")
+
+        // Guard against O(m×n) blowup on large files
+        if oldLines.count > lcsLineThreshold || newLines.count > lcsLineThreshold {
+            return computeSimpleDiff(oldLines: oldLines, newLines: newLines)
+        }
 
         // Compute LCS table
         let lcs = computeLCS(oldLines, newLines)
@@ -255,6 +264,29 @@ struct ApprovalDiffView: View {
         }
 
         return table
+    }
+
+    /// Simple fallback diff: all old lines removed, all new lines added.
+    /// Used when input exceeds the LCS threshold.
+    private static func computeSimpleDiff(oldLines: [String], newLines: [String]) -> [DiffLine] {
+        var result: [DiffLine] = []
+        var lineId = 0
+
+        for (i, line) in oldLines.enumerated() {
+            result.append(DiffLine(
+                id: lineId, kind: .removed, text: line,
+                oldLineNumber: i + 1, newLineNumber: nil
+            ))
+            lineId += 1
+        }
+        for (i, line) in newLines.enumerated() {
+            result.append(DiffLine(
+                id: lineId, kind: .added, text: line,
+                oldLineNumber: nil, newLineNumber: i + 1
+            ))
+            lineId += 1
+        }
+        return result
     }
 
     /// Compute diff for Write tool (all lines are additions)

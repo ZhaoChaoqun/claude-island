@@ -25,7 +25,7 @@ struct CommandHighlightView: View {
         "mkfs",
         "dd if=",
         ":> /",
-        "> /dev/",
+        "> /dev/sd",
         "shutdown",
         "reboot",
         "kill -9",
@@ -44,7 +44,7 @@ struct CommandHighlightView: View {
         let lines = command.components(separatedBy: "\n")
         let flags = lines.map { line in
             Self.dangerousPatterns.contains { pattern in
-                line.localizedCaseInsensitiveContains(pattern)
+                line.range(of: pattern, options: .caseInsensitive) != nil
             }
         }
         self.lineDangerFlags = flags
@@ -102,7 +102,7 @@ struct CommandHighlightView: View {
     private var commandText: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(zip(commandLines.indices, commandLines)), id: \.0) { index, line in
-                highlightedLine(line, isDangerousLine: lineDangerFlags[index])
+                highlightedLine(line, isDangerousLine: lineDangerFlags[index], isFirstLine: index == 0)
             }
         }
     }
@@ -111,10 +111,10 @@ struct CommandHighlightView: View {
         command.components(separatedBy: "\n")
     }
 
-    private func highlightedLine(_ line: String, isDangerousLine: Bool) -> some View {
+    private func highlightedLine(_ line: String, isDangerousLine: Bool, isFirstLine: Bool) -> some View {
         HStack(spacing: 0) {
-            // Prompt symbol
-            Text("$")
+            // Prompt symbol: $ for first line, > for continuation lines
+            Text(isFirstLine ? "$" : ">")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(TerminalColors.dim)
                 .padding(.trailing, 4)
