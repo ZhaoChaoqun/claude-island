@@ -35,9 +35,6 @@ class SoundSelector: ObservableObject {
     /// Height of the event type section header
     private let sectionHeaderHeight: CGFloat = 38
 
-    /// Height of the "Import Custom Sound" button row
-    private let importButtonHeight: CGFloat = 32
-
     private init() {
         loadSelections()
         refreshCustomSounds()
