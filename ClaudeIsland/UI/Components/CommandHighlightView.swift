@@ -34,6 +34,10 @@ struct CommandHighlightView: View {
         "fdisk",
     ]
 
+    /// Safe /dev/ directory prefixes — these are virtual/pseudo filesystems, not block devices.
+    /// Matches exact name (e.g. "fd") or subdirectory path (e.g. "fd/3").
+    private static let safeDevPrefixes = ["pts", "fd", "shm"]
+
     /// Safe /dev/ targets that should NOT trigger the dangerous redirect warning.
     /// Anything redirected to /dev/ that isn't in this list is flagged.
     private static let safeDevTargets: Set<String> = [
@@ -60,8 +64,11 @@ struct CommandHighlightView: View {
                 // Extract the device name (chars until whitespace, quote, or end)
                 let rest = lowered[afterPrefix...]
                 let deviceName = String(rest.prefix(while: { !$0.isWhitespace && $0 != "\"" && $0 != "'" && $0 != ";" && $0 != "|" && $0 != "&" }))
-                // Also handle /dev/pts/*, /dev/fd/*, /dev/shm/* as safe
-                if deviceName.hasPrefix("pts") || deviceName.hasPrefix("fd") || deviceName.hasPrefix("shm") {
+                // Check safe directory prefixes (pts, fd, shm) — exact name or subdirectory
+                let isSafePrefix = safeDevPrefixes.contains { prefix in
+                    deviceName == prefix || deviceName.hasPrefix("\(prefix)/")
+                }
+                if isSafePrefix {
                     // safe — skip
                 } else if safeDevTargets.contains(deviceName) {
                     // safe — skip
