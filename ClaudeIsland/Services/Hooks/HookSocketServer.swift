@@ -374,10 +374,12 @@ class HookSocketServer {
         var allData = Data()
         var buffer = [UInt8](repeating: 0, count: 131072)
         var pollFd = pollfd(fd: clientSocket, events: Int16(POLLIN), revents: 0)
+        var gotEOF = false
 
+        // Read until EOF or timeout (2 seconds max to handle slow connections)
         let startTime = Date()
-        while Date().timeIntervalSince(startTime) < 0.5 {
-            let pollResult = poll(&pollFd, 1, 50)
+        while Date().timeIntervalSince(startTime) < 2.0 {
+            let pollResult = poll(&pollFd, 1, 100)
 
             if pollResult > 0 && (pollFd.revents & Int16(POLLIN)) != 0 {
                 let bytesRead = read(clientSocket, &buffer, buffer.count)
@@ -385,20 +387,31 @@ class HookSocketServer {
                 if bytesRead > 0 {
                     allData.append(contentsOf: buffer[0..<bytesRead])
                 } else if bytesRead == 0 {
+                    // EOF — client called shutdown(SHUT_WR) or closed
+                    gotEOF = true
                     break
                 } else if errno != EAGAIN && errno != EWOULDBLOCK {
+                    logger.warning("Read error on client socket: errno=\(errno)")
                     break
                 }
             } else if pollResult == 0 {
+                // Poll timeout — if we have data, try to parse it
                 if !allData.isEmpty {
-                    break
+                    if (try? JSONDecoder().decode(HookEvent.self, from: allData)) != nil {
+                        // Complete JSON object received, stop waiting
+                        break
+                    }
+                    // Incomplete JSON — keep waiting for more data
                 }
             } else {
+                // Poll error
+                logger.warning("Poll error on client socket: errno=\(errno)")
                 break
             }
         }
 
         guard !allData.isEmpty else {
+            logger.debug("Empty data from client socket — closing")
             close(clientSocket)
             return
         }
@@ -406,7 +419,7 @@ class HookSocketServer {
         let data = allData
 
         guard let event = try? JSONDecoder().decode(HookEvent.self, from: data) else {
-            logger.warning("Failed to parse event: \(String(data: data, encoding: .utf8) ?? "?", privacy: .public)")
+            logger.warning("Failed to parse event (\(data.count) bytes, eof=\(gotEOF)): \(String(data: data, encoding: .utf8) ?? "?", privacy: .public)")
             close(clientSocket)
             return
         }

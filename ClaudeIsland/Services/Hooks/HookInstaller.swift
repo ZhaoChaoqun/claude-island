@@ -6,8 +6,29 @@
 //
 
 import Foundation
+import os.log
+
+private let logger = Logger(subsystem: "com.claudeisland", category: "HookInstaller")
 
 struct HookInstaller {
+
+    // MARK: - Required hook events
+
+    /// All hook events that must be registered for full session detection.
+    /// If any of these are missing, `isInstalled()` returns false and
+    /// `installIfNeeded()` will re-register them.
+    private static let requiredEvents: Set<String> = [
+        "UserPromptSubmit",
+        "PreToolUse",
+        "PostToolUse",
+        "PermissionRequest",
+        "Notification",
+        "Stop",
+        "SubagentStop",
+        "SessionStart",
+        "SessionEnd",
+        "PreCompact",
+    ]
 
     /// Install hook script and update settings.json on app launch
     static func installIfNeeded() {
@@ -17,21 +38,46 @@ struct HookInstaller {
         let pythonScript = hooksDir.appendingPathComponent("claude-island-state.py")
         let settings = claudeDir.appendingPathComponent("settings.json")
 
-        try? FileManager.default.createDirectory(
-            at: hooksDir,
-            withIntermediateDirectories: true
-        )
-
-        if let bundled = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
-            try? FileManager.default.removeItem(at: pythonScript)
-            try? FileManager.default.copyItem(at: bundled, to: pythonScript)
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o755],
-                ofItemAtPath: pythonScript.path
+        // Create hooks directory
+        do {
+            try FileManager.default.createDirectory(
+                at: hooksDir,
+                withIntermediateDirectories: true
             )
+        } catch {
+            logger.error("Failed to create hooks directory: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+
+        // Copy bundled Python hook script
+        if let bundled = Bundle.main.url(forResource: "claude-island-state", withExtension: "py") {
+            do {
+                if FileManager.default.fileExists(atPath: pythonScript.path) {
+                    try FileManager.default.removeItem(at: pythonScript)
+                }
+                try FileManager.default.copyItem(at: bundled, to: pythonScript)
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755],
+                    ofItemAtPath: pythonScript.path
+                )
+                logger.info("Hook script installed at \(pythonScript.path, privacy: .public)")
+            } catch {
+                logger.error("Failed to install hook script: \(error.localizedDescription, privacy: .public)")
+                return
+            }
+        } else {
+            logger.error("Bundled claude-island-state.py not found in app bundle")
+            return
         }
 
         updateSettings(at: settings)
+
+        // Post-install verification
+        if isInstalled() {
+            logger.info("Hook installation verified — all \(requiredEvents.count) events registered")
+        } else {
+            logger.error("Hook installation verification FAILED — some events may be missing")
+        }
     }
 
     private static func updateSettings(at settingsURL: URL) {
@@ -70,7 +116,8 @@ struct HookInstaller {
 
         for (event, config) in hookEvents {
             if var existingEvent = hooks[event] as? [[String: Any]] {
-                let hasOurHook = existingEvent.contains { entry in
+                // Remove stale entries first (e.g. pointing to wrong python path)
+                existingEvent.removeAll { entry in
                     if let entryHooks = entry["hooks"] as? [[String: Any]] {
                         return entryHooks.contains { h in
                             let cmd = h["command"] as? String ?? ""
@@ -79,10 +126,9 @@ struct HookInstaller {
                     }
                     return false
                 }
-                if !hasOurHook {
-                    existingEvent.append(contentsOf: config)
-                    hooks[event] = existingEvent
-                }
+                // Add fresh config
+                existingEvent.append(contentsOf: config)
+                hooks[event] = existingEvent
             } else {
                 hooks[event] = config
             }
@@ -90,19 +136,32 @@ struct HookInstaller {
 
         json["hooks"] = hooks
 
-        if let data = try? JSONSerialization.data(
-            withJSONObject: json,
-            options: [.prettyPrinted, .sortedKeys]
-        ) {
-            try? data.write(to: settingsURL)
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: json,
+                options: [.prettyPrinted, .sortedKeys]
+            )
+            try data.write(to: settingsURL)
+            logger.info("Settings updated at \(settingsURL.path, privacy: .public)")
+        } catch {
+            logger.error("Failed to write settings: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    /// Check if hooks are currently installed
+    /// Check if hooks are currently installed (all required events present)
     static func isInstalled() -> Bool {
         let claudeDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude")
         let settings = claudeDir.appendingPathComponent("settings.json")
+
+        // Also check the script file itself
+        let pythonScript = claudeDir
+            .appendingPathComponent("hooks")
+            .appendingPathComponent("claude-island-state.py")
+        guard FileManager.default.fileExists(atPath: pythonScript.path) else {
+            logger.debug("isInstalled: hook script not found at \(pythonScript.path, privacy: .public)")
+            return false
+        }
 
         guard let data = try? Data(contentsOf: settings),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -110,21 +169,29 @@ struct HookInstaller {
             return false
         }
 
-        for (_, value) in hooks {
+        // Check that ALL required events have our hook registered
+        var registeredEvents = Set<String>()
+        for (event, value) in hooks {
             if let entries = value as? [[String: Any]] {
                 for entry in entries {
                     if let entryHooks = entry["hooks"] as? [[String: Any]] {
                         for hook in entryHooks {
                             if let cmd = hook["command"] as? String,
                                cmd.contains("claude-island-state.py") {
-                                return true
+                                registeredEvents.insert(event)
                             }
                         }
                     }
                 }
             }
         }
-        return false
+
+        let missing = requiredEvents.subtracting(registeredEvents)
+        if !missing.isEmpty {
+            logger.debug("isInstalled: missing hook events: \(missing.sorted().joined(separator: ", "), privacy: .public)")
+            return false
+        }
+        return true
     }
 
     /// Uninstall hooks from settings.json and remove script
@@ -175,6 +242,8 @@ struct HookInstaller {
         ) {
             try? data.write(to: settings)
         }
+
+        logger.info("Hooks uninstalled")
     }
 
     private static func detectPython() -> String {

@@ -141,6 +141,13 @@ actor SessionStore {
             return
         }
 
+        // Process tool tracking FIRST so chatItems are created before we set their status.
+        // This prevents the race where PermissionRequest tries to update a tool's status
+        // before the PreToolUse-created chatItem exists.
+        processToolTracking(event: event, session: &session)
+        processSubagentTracking(event: event, session: &session)
+
+        // Now apply phase transition
         let newPhase = event.determinePhase()
 
         if session.phase.canTransition(to: newPhase) {
@@ -149,20 +156,19 @@ actor SessionStore {
             Self.logger.debug("Invalid transition: \(String(describing: session.phase), privacy: .public) -> \(String(describing: newPhase), privacy: .public), ignoring")
         }
 
+        // Update tool status AFTER both chatItem creation and phase transition
         if event.event == "PermissionRequest", let toolUseId = event.toolUseId {
             Self.logger.debug("Setting tool \(toolUseId.prefix(12), privacy: .public) status to waitingForApproval")
             updateToolStatus(in: &session, toolId: toolUseId, status: .waitingForApproval)
         }
-
-        processToolTracking(event: event, session: &session)
-        processSubagentTracking(event: event, session: &session)
 
         if event.event == "Stop" {
             session.subagentState = SubagentState()
         }
 
         sessions[sessionId] = session
-        publishState()
+        // NOTE: Do NOT call publishState() here — process() calls it once at the end
+        // to avoid UI seeing intermediate states during a single event processing cycle.
 
         if event.shouldSyncFile {
             scheduleFileSync(sessionId: sessionId, cwd: event.cwd)
@@ -626,9 +632,9 @@ actor SessionStore {
 
         sessions[payload.sessionId] = session
 
-        await emitToolCompletionEvents(
+        // Apply tool completions inline (no recursive process() call)
+        applyToolCompletions(
             sessionId: payload.sessionId,
-            session: session,
             completedToolIds: payload.completedToolIds,
             toolResults: payload.toolResults,
             structuredResults: payload.structuredResults
@@ -684,18 +690,23 @@ actor SessionStore {
         }
     }
 
-    /// Emit toolCompleted events for tools that have results in JSONL but aren't marked complete yet
-    private func emitToolCompletionEvents(
+    /// Apply tool completion results inline (without re-entering process()).
+    /// This avoids the recursive process() call that caused multiple publishState()
+    /// invocations and intermediate-state visibility during a single file update cycle.
+    private func applyToolCompletions(
         sessionId: String,
-        session: SessionState,
         completedToolIds: Set<String>,
         toolResults: [String: ConversationParser.ToolResult],
         structuredResults: [String: ToolResultData]
-    ) async {
-        for item in session.chatItems {
-            guard case .toolCall(let tool) = item.type else { continue }
+    ) {
+        guard var session = sessions[sessionId] else { return }
+        var phaseNeedsUpdate = false
 
-            // Only emit for tools that are running or waiting but have results in JSONL
+        for i in 0..<session.chatItems.count {
+            let item = session.chatItems[i]
+            guard case .toolCall(var tool) = item.type else { continue }
+
+            // Only process tools that are running or waiting but have results in JSONL
             guard tool.status == .running || tool.status == .waitingForApproval else { continue }
             guard completedToolIds.contains(item.id) else { continue }
 
@@ -704,9 +715,38 @@ actor SessionStore {
                 structuredResult: structuredResults[item.id]
             )
 
-            // Process the completion event (this will update state and phase consistently)
-            await process(.toolCompleted(sessionId: sessionId, toolUseId: item.id, result: result))
+            tool.status = result.status
+            tool.result = result.result
+            tool.structuredResult = result.structuredResult
+            session.chatItems[i] = ChatHistoryItem(
+                id: item.id,
+                type: .toolCall(tool),
+                timestamp: item.timestamp
+            )
+            Self.logger.debug("Tool \(item.id.prefix(12), privacy: .public) completed inline with status: \(String(describing: result.status), privacy: .public)")
+
+            // Check if this completion affects the current phase
+            if case .waitingForApproval(let ctx) = session.phase, ctx.toolUseId == item.id {
+                phaseNeedsUpdate = true
+            }
         }
+
+        // Update phase if the completed tool was the one blocking
+        if phaseNeedsUpdate {
+            if let nextPending = findNextPendingTool(in: session, excluding: "") {
+                let newPhase = SessionPhase.waitingForApproval(PermissionContext(
+                    toolUseId: nextPending.id,
+                    toolName: nextPending.name,
+                    toolInput: nil,
+                    receivedAt: nextPending.timestamp
+                ))
+                session.phase = newPhase
+            } else if session.phase.canTransition(to: .processing) {
+                session.phase = .processing
+            }
+        }
+
+        sessions[sessionId] = session
     }
 
     /// Create chat item (checks existingIds to avoid duplicates)
