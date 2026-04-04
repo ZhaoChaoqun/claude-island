@@ -238,22 +238,10 @@ actor WindowFocuser {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// Find TTY for a given PID by walking up the process tree
+    /// Find TTY for a given PID by walking up the process tree (fallback when no cached TTY)
     private nonisolated func findTTY(forPid pid: Int) -> String? {
         let tree = ProcessTreeBuilder.shared.buildTree()
-        var current = pid
-        var depth = 0
-
-        while current > 1 && depth < 20 {
-            guard let info = tree[current] else { break }
-            if let tty = info.tty {
-                return "/dev/\(tty)"
-            }
-            current = info.ppid
-            depth += 1
-        }
-
-        return nil
+        return ProcessTreeBuilder.shared.findTTY(forPid: pid, tree: tree)
     }
 
     /// Run an AppleScript and return whether it succeeded

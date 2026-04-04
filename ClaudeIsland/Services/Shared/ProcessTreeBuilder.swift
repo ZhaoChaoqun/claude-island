@@ -125,6 +125,23 @@ struct ProcessTreeBuilder: Sendable {
         return descendants
     }
 
+    /// Find TTY device path for a PID by walking up the process tree
+    nonisolated func findTTY(forPid pid: Int, tree: [Int: ProcessInfo]) -> String? {
+        var current = pid
+        var depth = 0
+
+        while current > 1 && depth < 20 {
+            guard let info = tree[current] else { break }
+            if let tty = info.tty {
+                return "/dev/\(tty)"
+            }
+            current = info.ppid
+            depth += 1
+        }
+
+        return nil
+    }
+
     /// Get working directory for a process using lsof
     nonisolated func getWorkingDirectory(forPid pid: Int) -> String? {
         guard let output = ProcessExecutor.shared.runSyncOrNil("/usr/sbin/lsof", arguments: ["-p", String(pid), "-Fn"]) else {

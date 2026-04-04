@@ -49,7 +49,7 @@ struct TerminalResolver: Sendable {
         let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: claudePid, tree: tree)
 
         // Find TTY from the tree (cache it so we don't rebuild on each jump)
-        let tty = findTTY(forPid: claudePid, tree: tree)
+        let tty = ProcessTreeBuilder.shared.findTTY(forPid: claudePid, tree: tree)
 
         // Walk up process tree to find terminal app
         if let appInfo = TerminalAppRegistry.appInfo(forPid: claudePid, tree: tree) {
@@ -99,7 +99,7 @@ struct TerminalResolver: Sendable {
     /// Walk up from a PID in a pre-built tree
     private nonisolated func resolveFromTree(pid: Int, tree: [Int: ProcessInfo], apps: [NSRunningApplication]) -> ResolvedTerminal? {
         let isInTmux = ProcessTreeBuilder.shared.isInTmux(pid: pid, tree: tree)
-        let tty = findTTY(forPid: pid, tree: tree)
+        let tty = ProcessTreeBuilder.shared.findTTY(forPid: pid, tree: tree)
 
         if let appInfo = TerminalAppRegistry.appInfo(forPid: pid, tree: tree),
            let bundleId = findRunningBundleId(for: appInfo, apps: apps) {
@@ -215,20 +215,4 @@ struct TerminalResolver: Sendable {
         }
     }
 
-    /// Find TTY for a given PID by walking up a pre-built process tree
-    private nonisolated func findTTY(forPid pid: Int, tree: [Int: ProcessInfo]) -> String? {
-        var current = pid
-        var depth = 0
-
-        while current > 1 && depth < 20 {
-            guard let info = tree[current] else { break }
-            if let tty = info.tty {
-                return "/dev/\(tty)"
-            }
-            current = info.ppid
-            depth += 1
-        }
-
-        return nil
-    }
 }
