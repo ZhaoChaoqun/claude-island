@@ -273,6 +273,10 @@ actor ConversationParser {
         _ = parseNewLines(filePath: sessionFile, state: &state)
         incrementalState[sessionId] = state
 
+        // parseNewLines returns only NEW messages since last call,
+        // but state.messages accumulates all parsed messages.
+        // If there were no new lines, newMessages is empty but state.messages
+        // still has everything from previous parses.
         return state.messages
     }
 
@@ -338,18 +342,18 @@ actor ConversationParser {
         }
 
         if fileSize == state.lastFileOffset {
-            return state.messages
+            return []
         }
 
         do {
             try fileHandle.seek(toOffset: state.lastFileOffset)
         } catch {
-            return state.messages
+            return []
         }
 
         guard let newData = try? fileHandle.readToEnd(),
               let newContent = String(data: newData, encoding: .utf8) else {
-            return state.messages
+            return []
         }
 
         state.clearPending = false
@@ -374,6 +378,7 @@ actor ConversationParser {
                 continue
             }
 
+            // Process tool_result lines for completion tracking
             if line.contains("\"tool_result\"") {
                 if let lineData = line.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
@@ -412,7 +417,12 @@ actor ConversationParser {
                         }
                     }
                 }
-            } else if line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"") {
+                // tool_result lines are user messages with tool results, not text — skip message parsing
+                continue
+            }
+
+            // Parse user and assistant messages (including text, tool_use, thinking blocks)
+            if line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"") {
                 if let lineData = line.data(using: .utf8),
                    let json = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
                    let message = parseMessageLine(json, seenToolIds: &state.seenToolIds, toolIdToName: &state.toolIdToName) {

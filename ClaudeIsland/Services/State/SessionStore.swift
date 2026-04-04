@@ -977,7 +977,7 @@ actor SessionStore {
                 await self?.process(.clearDetected(sessionId: sessionId))
             }
 
-            guard !result.newMessages.isEmpty || result.clearDetected else {
+            guard !result.newMessages.isEmpty || result.clearDetected || !result.completedToolIds.isEmpty else {
                 return
             }
 

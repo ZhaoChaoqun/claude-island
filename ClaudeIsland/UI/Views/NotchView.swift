@@ -26,6 +26,7 @@ struct NotchView: View {
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
     @State private var isBouncing: Bool = false
+    @State private var notificationSuppressedUntil: Date = Date()  // Suppress notifications during context resume
 
     @Namespace private var activityNamespace
 
@@ -376,6 +377,16 @@ struct NotchView: View {
             // Show claude activity when processing or waiting for permission
             activityCoordinator.showActivity(type: .claude)
             isVisible = true
+
+            // When a session starts processing, set a suppression window.
+            // This prevents sound/bounce from firing if the session quickly
+            // transitions through processing → waitingForInput during context
+            // resume or session restoration.
+            let suppressionDuration: TimeInterval = 2.0
+            let newSuppressedUntil = Date().addingTimeInterval(suppressionDuration)
+            if newSuppressedUntil > notificationSuppressedUntil {
+                notificationSuppressedUntil = newSuppressedUntil
+            }
         } else if hasWaitingForInput {
             // Keep visible for waiting-for-input but hide the processing spinner
             activityCoordinator.hideActivity()
@@ -446,30 +457,47 @@ struct NotchView: View {
             waitingForInputTimestamps.removeValue(forKey: staleId)
         }
 
-        // Bounce the notch when a session newly enters waitingForInput state
+        // Filter out sessions that still have active subagents — their waitingForInput
+        // is a transient state caused by SubagentStop, not a real "done" signal.
+        // Also filter sessions during notification suppression window (context resume).
+        let genuinelyWaitingSessions: [SessionState]
         if !newWaitingIds.isEmpty {
-            // Get the sessions that just entered waitingForInput
-            let newlyWaitingSessions = waitingForInputSessions.filter { newWaitingIds.contains($0.stableId) }
+            genuinelyWaitingSessions = waitingForInputSessions.filter { session in
+                guard newWaitingIds.contains(session.stableId) else { return false }
+                // Subagent stop causes a brief waitingForInput — ignore it
+                if session.subagentState.hasActiveSubagent { return false }
+                return true
+            }
+        } else {
+            genuinelyWaitingSessions = []
+        }
 
-            // Play notification sound if the session is not actively focused
-            if let soundName = AppSettings.notificationSound.soundName {
-                // Check if we should play sound (async check for tmux pane focus)
-                Task {
-                    let shouldPlaySound = await shouldPlayNotificationSound(for: newlyWaitingSessions)
-                    if shouldPlaySound {
-                        await MainActor.run {
-                            NSSound(named: soundName)?.play()
+        // Bounce the notch when a session genuinely enters waitingForInput state
+        if !genuinelyWaitingSessions.isEmpty {
+            // Suppress notifications during context resume window
+            let isSuppressed = now < notificationSuppressedUntil
+
+            if !isSuppressed {
+                // Play notification sound if the session is not actively focused
+                if let soundName = AppSettings.notificationSound.soundName {
+                    // Check if we should play sound (async check for tmux pane focus)
+                    Task {
+                        let shouldPlaySound = await shouldPlayNotificationSound(for: genuinelyWaitingSessions)
+                        if shouldPlaySound {
+                            await MainActor.run {
+                                NSSound(named: soundName)?.play()
+                            }
                         }
                     }
                 }
-            }
 
-            // Trigger bounce animation to get user's attention
-            DispatchQueue.main.async {
-                isBouncing = true
-                // Bounce back after a short delay
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                    isBouncing = false
+                // Trigger bounce animation to get user's attention
+                DispatchQueue.main.async {
+                    isBouncing = true
+                    // Bounce back after a short delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        isBouncing = false
+                    }
                 }
             }
 
