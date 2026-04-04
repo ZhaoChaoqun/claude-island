@@ -141,6 +141,7 @@ struct InstanceRow: View {
     @State private var isHovered = false
     @State private var spinnerPhase = 0
     @State private var isYabaiAvailable = false
+    @State private var isPreviewExpanded = true
 
     private let claudeOrange = Color(red: 0.85, green: 0.47, blue: 0.34)
     private let spinnerSymbols = ["·", "✢", "✳", "∗", "✻", "✽"]
@@ -162,7 +163,46 @@ struct InstanceRow: View {
         return toolName == "AskUserQuestion"
     }
 
+    /// Extract tool preview data from the active permission context
+    private var toolPreview: ToolPreviewData? {
+        guard isWaitingForApproval,
+              let permission = session.activePermission else { return nil }
+        return ToolPreviewData.from(permission: permission)
+    }
+
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Main row content
+            mainRow
+
+            // Expandable tool preview (diff/command) below the row
+            if isWaitingForApproval, let preview = toolPreview, isPreviewExpanded {
+                toolPreviewSection(preview)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 14)
+        .padding(.vertical, 10)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            onChat()
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
+        .animation(.easeInOut(duration: 0.2), value: isPreviewExpanded)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
+        )
+        .onHover { isHovered = $0 }
+        .task {
+            isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
+        }
+    }
+
+    // MARK: - Main Row
+
+    private var mainRow: some View {
         HStack(alignment: .center, spacing: 10) {
             // State indicator on left
             stateIndicator
@@ -198,6 +238,20 @@ struct InstanceRow: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.white.opacity(0.5))
                                 .lineLimit(1)
+                        } else if toolPreview != nil {
+                            // Show toggle for preview instead of raw input
+                            Button {
+                                isPreviewExpanded.toggle()
+                            } label: {
+                                HStack(spacing: 2) {
+                                    Image(systemName: isPreviewExpanded ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 8, weight: .medium))
+                                    Text(isPreviewExpanded ? "Hide preview" : "Show preview")
+                                        .font(.system(size: 10))
+                                }
+                                .foregroundColor(.white.opacity(0.35))
+                            }
+                            .buttonStyle(.plain)
                         } else if let input = session.pendingToolInput {
                             Text(input)
                                 .font(.system(size: 11))
@@ -323,22 +377,33 @@ struct InstanceRow: View {
                 .transition(.opacity.combined(with: .scale(scale: 0.9)))
             }
         }
-        .padding(.leading, 8)
-        .padding(.trailing, 14)
-        .padding(.vertical, 10)
-        .contentShape(Rectangle())
-        .onTapGesture(count: 2) {
-            onChat()
+    }
+
+    // MARK: - Tool Preview Section
+
+    @ViewBuilder
+    private func toolPreviewSection(_ preview: ToolPreviewData) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Divider()
+                .background(Color.white.opacity(0.06))
+
+            switch preview {
+            case .diff(let filePath, let oldString, let newString):
+                DiffView(
+                    filePath: filePath,
+                    oldString: oldString,
+                    newString: newString
+                )
+                .padding(.top, 6)
+                .padding(.horizontal, 4)
+
+            case .command(let cmd):
+                CommandHighlightView(command: cmd)
+                    .padding(.top, 6)
+                    .padding(.horizontal, 4)
+            }
         }
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isWaitingForApproval)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isHovered ? Color.white.opacity(0.06) : Color.clear)
-        )
-        .onHover { isHovered = $0 }
-        .task {
-            isYabaiAvailable = await WindowFinder.shared.isYabaiAvailable()
-        }
+        .padding(.bottom, 4)
     }
 
     @ViewBuilder
@@ -519,5 +584,49 @@ struct TerminalButton: View {
             .clipShape(Capsule())
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Tool Preview Data
+
+/// Extracted preview data for diff/command display in the approval panel
+enum ToolPreviewData {
+    /// Edit or Write tool — shows a code diff
+    case diff(filePath: String, oldString: String?, newString: String?)
+    /// Bash tool — shows a highlighted command
+    case command(String)
+
+    /// Extract preview data from a permission context.
+    /// Returns nil for tools that don't have a meaningful preview.
+    static func from(permission: PermissionContext) -> ToolPreviewData? {
+        let toolName = permission.toolName
+        guard let input = permission.toolInput else { return nil }
+
+        switch toolName {
+        case "Edit":
+            guard let filePath = stringValue(input["file_path"]),
+                  let oldString = stringValue(input["old_string"]),
+                  let newString = stringValue(input["new_string"]) else { return nil }
+            return .diff(filePath: filePath, oldString: oldString, newString: newString)
+
+        case "Write":
+            guard let filePath = stringValue(input["file_path"]),
+                  let content = stringValue(input["content"]) else { return nil }
+            // Write = all new content, no old string
+            return .diff(filePath: filePath, oldString: nil, newString: content)
+
+        case "Bash", "BashOutput":
+            guard let cmd = stringValue(input["command"]) else { return nil }
+            return .command(cmd)
+
+        default:
+            return nil
+        }
+    }
+
+    /// Extract a String value from an AnyCodable
+    private static func stringValue(_ value: AnyCodable?) -> String? {
+        guard let v = value else { return nil }
+        return v.value as? String
     }
 }
