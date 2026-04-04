@@ -20,8 +20,11 @@ struct NotchView: View {
     @StateObject private var sessionMonitor = ClaudeSessionMonitor()
     @StateObject private var activityCoordinator = NotchActivityCoordinator.shared
     @ObservedObject private var updateManager = UpdateManager.shared
+    private let soundSelector = SoundSelector.shared
     @State private var previousPendingIds: Set<String> = []
     @State private var previousWaitingForInputIds: Set<String> = []
+    @State private var previousQuestionIds: Set<String> = []
+    @State private var previousEndedIds: Set<String> = []
     @State private var waitingForInputTimestamps: [String: Date] = [:]  // sessionId -> when it entered waitingForInput
     @State private var isVisible: Bool = false
     @State private var isHovering: Bool = false
@@ -211,6 +214,8 @@ struct NotchView: View {
         .onChange(of: sessionMonitor.instances) { _, instances in
             handleProcessingChange()
             handleWaitingForInputChange(instances)
+            handleQuestionChange(instances)
+            handleSessionEndedChange(instances)
         }
     }
 
@@ -469,10 +474,16 @@ struct NotchView: View {
         let currentIds = Set(sessions.map { $0.stableId })
         let newPendingIds = currentIds.subtracting(previousPendingIds)
 
-        if !newPendingIds.isEmpty &&
-           viewModel.status == .closed &&
-           !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
-            viewModel.notchOpen(reason: .notification)
+        if !newPendingIds.isEmpty {
+            // Play permission request sound for newly pending sessions
+            if soundSelector.hasSound(for: .permissionRequest) {
+                soundSelector.playSound(for: .permissionRequest)
+            }
+
+            if viewModel.status == .closed &&
+               !TerminalVisibilityDetector.isTerminalVisibleOnCurrentSpace() {
+                viewModel.notchOpen(reason: .notification)
+            }
         }
 
         previousPendingIds = currentIds
@@ -517,14 +528,13 @@ struct NotchView: View {
             let isSuppressed = now < notificationSuppressedUntil
 
             if !isSuppressed {
-                // Play notification sound if the session is not actively focused
-                if let soundName = AppSettings.notificationSound.soundName {
-                    // Check if we should play sound (async check for tmux pane focus)
+                // Play task complete notification sound
+                if soundSelector.hasSound(for: .taskComplete) {
                     Task {
                         let shouldPlaySound = await shouldPlayNotificationSound(for: genuinelyWaitingSessions)
                         if shouldPlaySound {
                             await MainActor.run {
-                                NSSound(named: soundName)?.play()
+                                soundSelector.playSound(for: .taskComplete)
                             }
                         }
                     }
@@ -566,5 +576,39 @@ struct NotchView: View {
         }
 
         return false
+    }
+
+    /// Handle sessions entering question-waiting state (AskUserQuestion)
+    private func handleQuestionChange(_ instances: [SessionState]) {
+        let questionSessions = instances.filter { $0.phase.isWaitingForAnswer }
+        let currentIds = Set(questionSessions.map { $0.stableId })
+        let newQuestionIds = currentIds.subtracting(previousQuestionIds)
+
+        if !newQuestionIds.isEmpty {
+            // Skip if within suppression window
+            let isSuppressed = Date() < notificationSuppressedUntil
+            if !isSuppressed && soundSelector.hasSound(for: .questionWaiting) {
+                soundSelector.playSound(for: .questionWaiting)
+            }
+        }
+
+        previousQuestionIds = currentIds
+    }
+
+    /// Handle sessions entering ended state
+    private func handleSessionEndedChange(_ instances: [SessionState]) {
+        let endedSessions = instances.filter { $0.phase == .ended }
+        let currentIds = Set(endedSessions.map { $0.stableId })
+        let newEndedIds = currentIds.subtracting(previousEndedIds)
+
+        if !newEndedIds.isEmpty {
+            // Skip if within suppression window
+            let isSuppressed = Date() < notificationSuppressedUntil
+            if !isSuppressed && soundSelector.hasSound(for: .sessionEnded) {
+                soundSelector.playSound(for: .sessionEnded)
+            }
+        }
+
+        previousEndedIds = currentIds
     }
 }
