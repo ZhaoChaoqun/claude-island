@@ -11,12 +11,8 @@ import SwiftUI
 struct CommandHighlightView: View {
     let command: String
 
-    /// Whether this command contains any dangerous patterns
-    private var isDangerous: Bool {
-        Self.dangerousPatterns.contains { pattern in
-            command.localizedCaseInsensitiveContains(pattern)
-        }
-    }
+    /// Cached dangerous flag — computed once at init, not per render
+    let isDangerous: Bool
 
     /// Dangerous command patterns that warrant a red warning
     private static let dangerousPatterns: [String] = [
@@ -39,15 +35,21 @@ struct CommandHighlightView: View {
         "fdisk",
     ]
 
-    /// Keywords to highlight in the command
-    private static let shellKeywords: Set<String> = [
-        "if", "then", "else", "elif", "fi",
-        "for", "while", "do", "done",
-        "case", "esac", "in",
-        "function", "return", "exit",
-        "export", "source", "eval",
-        "true", "false",
-    ]
+    /// Per-line danger cache: true if that line contains a dangerous pattern
+    private let lineDangerFlags: [Bool]
+
+    init(command: String) {
+        self.command = command
+
+        let lines = command.components(separatedBy: "\n")
+        let flags = lines.map { line in
+            Self.dangerousPatterns.contains { pattern in
+                line.localizedCaseInsensitiveContains(pattern)
+            }
+        }
+        self.lineDangerFlags = flags
+        self.isDangerous = flags.contains(true)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -99,18 +101,17 @@ struct CommandHighlightView: View {
 
     private var commandText: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(commandLines.enumerated()), id: \.offset) { _, line in
-                highlightedLine(line)
+            ForEach(Array(zip(commandLines.indices, commandLines)), id: \.0) { index, line in
+                highlightedLine(line, isDangerousLine: lineDangerFlags[index])
             }
         }
     }
 
     private var commandLines: [String] {
-        // Split by && or ; for multi-command display
         command.components(separatedBy: "\n")
     }
 
-    private func highlightedLine(_ line: String) -> some View {
+    private func highlightedLine(_ line: String, isDangerousLine: Bool) -> some View {
         HStack(spacing: 0) {
             // Prompt symbol
             Text("$")
@@ -118,14 +119,10 @@ struct CommandHighlightView: View {
                 .foregroundColor(TerminalColors.dim)
                 .padding(.trailing, 4)
 
-            // Check if this specific line has dangerous content
-            let lineDangerous = Self.dangerousPatterns.contains { pattern in
-                line.localizedCaseInsensitiveContains(pattern)
-            }
-
+            // Code content — red if dangerous, normal otherwise
             Text(line)
                 .font(.system(size: 10, design: .monospaced))
-                .foregroundColor(lineDangerous ? TerminalColors.red : .white.opacity(0.8))
+                .foregroundColor(isDangerousLine ? TerminalColors.red : .white.opacity(0.8))
                 .lineLimit(nil)
         }
     }

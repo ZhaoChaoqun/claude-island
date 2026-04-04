@@ -389,7 +389,7 @@ struct InstanceRow: View {
 
             switch preview {
             case .diff(let filePath, let oldString, let newString):
-                DiffView(
+                ApprovalDiffView(
                     filePath: filePath,
                     oldString: oldString,
                     newString: newString

@@ -27,27 +27,31 @@ struct DiffStats {
     let deletions: Int
 }
 
-struct DiffView: View {
+struct ApprovalDiffView: View {
     let filePath: String
-    let oldString: String?
-    let newString: String?
 
+    /// Precomputed diff lines (stored, not recomputed on every render)
+    let lines: [DiffLine]
+    /// Precomputed diff stats
+    let stats: DiffStats
     /// Whether this is a Write (full file content) vs Edit (old → new)
-    private var isWrite: Bool { oldString == nil }
+    let isWrite: Bool
 
-    private var lines: [DiffLine] {
+    init(filePath: String, oldString: String?, newString: String?) {
+        self.filePath = filePath
+        self.isWrite = (oldString == nil)
+
         if let old = oldString, let new = newString {
-            return computeEditDiff(old: old, new: new)
+            self.lines = Self.computeEditDiff(old: old, new: new)
         } else if let content = newString {
-            return computeWriteDiff(content: content)
+            self.lines = Self.computeWriteDiff(content: content)
+        } else {
+            self.lines = []
         }
-        return []
-    }
 
-    private var stats: DiffStats {
-        let added = lines.filter { $0.kind == .added }.count
-        let removed = lines.filter { $0.kind == .removed }.count
-        return DiffStats(additions: added, deletions: removed)
+        let added = self.lines.filter { $0.kind == .added }.count
+        let removed = self.lines.filter { $0.kind == .removed }.count
+        self.stats = DiffStats(additions: added, deletions: removed)
     }
 
     var body: some View {
@@ -186,36 +190,47 @@ struct DiffView: View {
 
     // MARK: - Diff Computation
 
-    /// Compute diff for Edit tool (old_string → new_string)
-    private func computeEditDiff(old: String, new: String) -> [DiffLine] {
+    /// Compute diff for Edit tool (old_string → new_string) with line-level comparison.
+    /// Uses a simple LCS-based approach: identical lines become context, others are removed/added.
+    private static func computeEditDiff(old: String, new: String) -> [DiffLine] {
         let oldLines = old.components(separatedBy: "\n")
         let newLines = new.components(separatedBy: "\n")
 
+        // Compute LCS table
+        let lcs = computeLCS(oldLines, newLines)
+
+        // Walk LCS table to produce diff lines
         var result: [DiffLine] = []
         var lineId = 0
+        var i = oldLines.count
+        var j = newLines.count
+        var stack: [(kind: DiffLine.Kind, text: String, oldNum: Int?, newNum: Int?)] = []
 
-        // Simple diff: show all old lines as removed, all new lines as added
-        // For short diffs this is clear enough; a full LCS would be overkill here
-        let maxContext = 0 // No context lines for simple replacement
-
-        for (i, line) in oldLines.enumerated() {
-            result.append(DiffLine(
-                id: lineId,
-                kind: .removed,
-                text: line,
-                oldLineNumber: i + 1,
-                newLineNumber: nil
-            ))
-            lineId += 1
+        while i > 0 || j > 0 {
+            if i > 0 && j > 0 && oldLines[i - 1] == newLines[j - 1] {
+                // Context line (same in both)
+                stack.append((.context, oldLines[i - 1], i, j))
+                i -= 1
+                j -= 1
+            } else if j > 0 && (i == 0 || lcs[i][j - 1] >= lcs[i - 1][j]) {
+                // Added line
+                stack.append((.added, newLines[j - 1], nil, j))
+                j -= 1
+            } else if i > 0 {
+                // Removed line
+                stack.append((.removed, oldLines[i - 1], i, nil))
+                i -= 1
+            }
         }
 
-        for (i, line) in newLines.enumerated() {
+        // Reverse since we walked backwards
+        for entry in stack.reversed() {
             result.append(DiffLine(
                 id: lineId,
-                kind: .added,
-                text: line,
-                oldLineNumber: nil,
-                newLineNumber: i + 1
+                kind: entry.kind,
+                text: entry.text,
+                oldLineNumber: entry.oldNum,
+                newLineNumber: entry.newNum
             ))
             lineId += 1
         }
@@ -223,8 +238,27 @@ struct DiffView: View {
         return result
     }
 
+    /// Compute LCS length table for two arrays of strings
+    private static func computeLCS(_ a: [String], _ b: [String]) -> [[Int]] {
+        let m = a.count
+        let n = b.count
+        var table = Array(repeating: Array(repeating: 0, count: n + 1), count: m + 1)
+
+        for i in 1...m {
+            for j in 1...n {
+                if a[i - 1] == b[j - 1] {
+                    table[i][j] = table[i - 1][j - 1] + 1
+                } else {
+                    table[i][j] = max(table[i - 1][j], table[i][j - 1])
+                }
+            }
+        }
+
+        return table
+    }
+
     /// Compute diff for Write tool (all lines are additions)
-    private func computeWriteDiff(content: String) -> [DiffLine] {
+    private static func computeWriteDiff(content: String) -> [DiffLine] {
         let lines = content.components(separatedBy: "\n")
         return lines.enumerated().map { (i, line) in
             DiffLine(
