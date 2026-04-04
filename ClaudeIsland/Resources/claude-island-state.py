@@ -3,6 +3,7 @@
 Claude Island Hook
 - Sends session state to ClaudeIsland.app via Unix socket
 - For PermissionRequest: waits for user decision from the app
+- For AskUserQuestion: waits for user answer from the app
 """
 import json
 import os
@@ -58,7 +59,7 @@ def get_tty():
 
 def send_event(state, retries=MAX_RETRIES):
     """Send event to app with retry logic. Returns response if any."""
-    is_permission = state.get("status") == "waiting_for_approval"
+    needs_response = state.get("status") in ("waiting_for_approval", "waiting_for_answer")
 
     for attempt in range(1, retries + 1):
         sock = None
@@ -74,7 +75,7 @@ def send_event(state, retries=MAX_RETRIES):
                     return None
 
             sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            sock.settimeout(TIMEOUT_SECONDS if is_permission else 5)
+            sock.settimeout(TIMEOUT_SECONDS if needs_response else 5)
             sock.connect(SOCKET_PATH)
 
             payload = json.dumps(state).encode()
@@ -82,8 +83,8 @@ def send_event(state, retries=MAX_RETRIES):
             # Shut down the write side so the server sees EOF
             sock.shutdown(socket.SHUT_WR)
 
-            # For permission requests, wait for response
-            if is_permission:
+            # For permission requests and question answers, wait for response
+            if needs_response:
                 chunks = []
                 while True:
                     chunk = sock.recv(4096)
@@ -164,13 +165,43 @@ def main():
         state["status"] = "processing"
 
     elif event == "PreToolUse":
-        state["status"] = "running_tool"
-        state["tool"] = data.get("tool_name")
+        tool_name = data.get("tool_name")
+        state["tool"] = tool_name
         state["tool_input"] = tool_input
         # Send tool_use_id to Swift for caching
         tool_use_id_from_event = data.get("tool_use_id")
         if tool_use_id_from_event:
             state["tool_use_id"] = tool_use_id_from_event
+
+        # AskUserQuestion: intercept and wait for user answer from the app
+        if tool_name == "AskUserQuestion":
+            state["status"] = "waiting_for_answer"
+
+            # Send to app and wait for answer
+            response = send_event(state)
+
+            if response:
+                answers = response.get("answers")
+                if answers:
+                    # Build updatedInput: echo back questions + add answers
+                    updated_input = dict(tool_input)
+                    updated_input["answers"] = answers
+                    output = {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "allow",
+                            "updatedInput": updated_input,
+                        }
+                    }
+                    print(json.dumps(output))
+                    sys.exit(0)
+
+            # No response or no answers - output empty JSON so Claude Code
+            # falls through to its normal terminal UI gracefully
+            print(json.dumps({}))
+            sys.exit(0)
+        else:
+            state["status"] = "running_tool"
 
     elif event == "PostToolUse":
         state["status"] = "processing"

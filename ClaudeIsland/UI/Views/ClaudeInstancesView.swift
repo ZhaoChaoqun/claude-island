@@ -56,10 +56,10 @@ struct ClaudeInstancesView: View {
     }
 
     /// Lower number = higher priority
-    /// Approval requests share priority with processing to maintain stable ordering
+    /// Approval/question requests share priority with processing to maintain stable ordering
     private func phasePriority(_ phase: SessionPhase) -> Int {
         switch phase {
-        case .waitingForApproval, .processing, .compacting: return 0
+        case .waitingForApproval, .waitingForAnswer, .processing, .compacting: return 0
         case .waitingForInput: return 1
         case .idle, .ended: return 2
         }
@@ -75,7 +75,9 @@ struct ClaudeInstancesView: View {
                         onChat: { openChat(session) },
                         onArchive: { archiveSession(session) },
                         onApprove: { approveSession(session) },
-                        onReject: { rejectSession(session) }
+                        onReject: { rejectSession(session) },
+                        onAnswer: { answers in answerQuestion(session, answers: answers) },
+                        onOpenQuestion: { openQuestion(session) }
                     )
                     .id(session.stableId)
                 }
@@ -114,6 +116,14 @@ struct ClaudeInstancesView: View {
     private func archiveSession(_ session: SessionState) {
         sessionMonitor.archiveSession(sessionId: session.sessionId)
     }
+
+    private func answerQuestion(_ session: SessionState, answers: [String: String]) {
+        sessionMonitor.answerQuestion(sessionId: session.sessionId, answers: answers)
+    }
+
+    private func openQuestion(_ session: SessionState) {
+        viewModel.showQuestion(for: session)
+    }
 }
 
 // MARK: - Instance Row
@@ -125,6 +135,8 @@ struct InstanceRow: View {
     let onArchive: () -> Void
     let onApprove: () -> Void
     let onReject: () -> Void
+    let onAnswer: ([String: String]) -> Void
+    let onOpenQuestion: () -> Void
 
     @State private var isHovered = false
     @State private var spinnerPhase = 0
@@ -137,6 +149,11 @@ struct InstanceRow: View {
     /// Whether we're showing the approval UI
     private var isWaitingForApproval: Bool {
         session.phase.isWaitingForApproval
+    }
+
+    /// Whether we're showing the question UI
+    private var isWaitingForAnswer: Bool {
+        session.phase.isWaitingForAnswer
     }
 
     /// Whether the pending tool requires interactive input (not just approve/deny)
@@ -158,8 +175,19 @@ struct InstanceRow: View {
                     .foregroundColor(.white)
                     .lineLimit(1)
 
-                // Show tool call when waiting for approval, otherwise last activity
-                if isWaitingForApproval, let toolName = session.pendingToolName {
+                // Show tool call when waiting for approval/answer, otherwise last activity
+                if isWaitingForAnswer, let ctx = session.activeQuestion {
+                    // Show question summary in amber
+                    HStack(spacing: 4) {
+                        Text("Question")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(TerminalColors.amber.opacity(0.9))
+                        Text(ctx.questionText)
+                            .font(.system(size: 11))
+                            .foregroundColor(.white.opacity(0.5))
+                            .lineLimit(1)
+                    }
+                } else if isWaitingForApproval, let toolName = session.pendingToolName {
                     // Show tool name in amber + input on same line
                     HStack(spacing: 4) {
                         Text(MCPToolFormatter.formatToolName(toolName))
@@ -226,8 +254,29 @@ struct InstanceRow: View {
 
             Spacer(minLength: 0)
 
-            // Action icons or approval buttons
-            if isWaitingForApproval && isInteractiveTool {
+            // Action icons or approval/question buttons
+            if isWaitingForAnswer {
+                // Question - show "Answer" button that opens question view
+                HStack(spacing: 8) {
+                    Button {
+                        onOpenQuestion()
+                    } label: {
+                        HStack(spacing: 3) {
+                            Image(systemName: "questionmark.circle")
+                                .font(.system(size: 9, weight: .medium))
+                            Text("Answer")
+                                .font(.system(size: 11, weight: .medium))
+                        }
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(TerminalColors.amber.opacity(0.9))
+                        .clipShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.9)))
+            } else if isWaitingForApproval && isInteractiveTool {
                 // Interactive tools like AskUserQuestion - show chat + terminal buttons
                 HStack(spacing: 8) {
                     IconButton(icon: "bubble.left") {
@@ -309,6 +358,10 @@ struct InstanceRow: View {
                 .onReceive(spinnerTimer) { _ in
                     spinnerPhase = (spinnerPhase + 1) % spinnerSymbols.count
                 }
+        case .waitingForAnswer:
+            Text("?")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(TerminalColors.amber)
         case .waitingForInput:
             Circle()
                 .fill(TerminalColors.green)

@@ -13,6 +13,8 @@ struct SessionPhaseHelpers {
         switch phase {
         case .waitingForApproval:
             return TerminalColors.amber
+        case .waitingForAnswer:
+            return TerminalColors.amber
         case .waitingForInput:
             return TerminalColors.green
         case .processing:
@@ -29,6 +31,8 @@ struct SessionPhaseHelpers {
         switch phase {
         case .waitingForApproval(let ctx):
             return "Waiting for approval: \(ctx.toolName)"
+        case .waitingForAnswer(let ctx):
+            return "Question: \(ctx.questionText)"
         case .waitingForInput:
             return "Ready for input"
         case .processing:

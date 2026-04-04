@@ -27,12 +27,14 @@ enum NotchContentType: Equatable {
     case instances
     case menu
     case chat(SessionState)
+    case question(SessionState)
 
     var id: String {
         switch self {
         case .instances: return "instances"
         case .menu: return "menu"
         case .chat(let session): return "chat-\(session.sessionId)"
+        case .question(let session): return "question-\(session.sessionId)"
         }
     }
 }
@@ -69,6 +71,12 @@ class NotchViewModel: ObservableObject {
             return CGSize(
                 width: min(screenRect.width * 0.5, 600),
                 height: 580
+            )
+        case .question:
+            // Compact size for question panel
+            return CGSize(
+                width: min(screenRect.width * 0.4, 480),
+                height: 380
             )
         case .menu:
             // Compact size for settings menu
@@ -137,9 +145,10 @@ class NotchViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
-    /// Whether we're in chat mode (sticky behavior)
+    /// Whether we're in chat or question mode (sticky behavior)
     private var isInChatMode: Bool {
         if case .chat = contentType { return true }
+        if case .question = contentType { return true }
         return false
     }
 
@@ -276,6 +285,14 @@ class NotchViewModel: ObservableObject {
             return
         }
         contentType = .chat(session)
+    }
+
+    /// Show question panel for a session
+    func showQuestion(for session: SessionState) {
+        if case .question(let current) = contentType, current.sessionId == session.sessionId {
+            return
+        }
+        contentType = .question(session)
     }
 
     /// Go back to instances list and clear saved chat state
