@@ -181,12 +181,13 @@ struct InstanceRow: View {
     }
 
     var body: some View {
+        let preview = toolPreview
         VStack(alignment: .leading, spacing: 0) {
             // Main row content
-            mainRow
+            mainRow(preview: preview)
 
             // Expandable tool preview (diff/command) below the row
-            if isWaitingForApproval, let preview = toolPreview, isPreviewExpanded {
+            if isWaitingForApproval, let preview, isPreviewExpanded {
                 toolPreviewSection(preview)
                     .transition(.opacity.combined(with: .move(edge: .top)))
             }
@@ -209,7 +210,7 @@ struct InstanceRow: View {
 
     // MARK: - Main Row
 
-    private var mainRow: some View {
+    private func mainRow(preview: ToolPreviewData?) -> some View {
         HStack(alignment: .center, spacing: 10) {
             // Terminal type icon + state indicator on left
             terminalTypeIcon
@@ -258,7 +259,7 @@ struct InstanceRow: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.white.opacity(0.5))
                                 .lineLimit(1)
-                        } else if toolPreview != nil {
+                        } else if preview != nil {
                             // Show toggle for preview instead of raw input
                             Button {
                                 isPreviewExpanded.toggle()

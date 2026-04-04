@@ -25,7 +25,6 @@ struct CommandHighlightView: View {
         "mkfs",
         "dd if=",
         ":> /",
-        "> /dev/",
         "shutdown",
         "reboot",
         "kill -9",
@@ -35,6 +34,53 @@ struct CommandHighlightView: View {
         "fdisk",
     ]
 
+    /// Safe /dev/ directory prefixes — these are virtual/pseudo filesystems, not block devices.
+    /// Matches exact name (e.g. "fd") or subdirectory path (e.g. "fd/3").
+    private static let safeDevPrefixes = ["pts", "fd", "shm"]
+
+    /// Safe /dev/ targets that should NOT trigger the dangerous redirect warning.
+    /// Anything redirected to /dev/ that isn't in this list is flagged.
+    private static let safeDevTargets: Set<String> = [
+        "null", "zero", "random", "urandom",
+        "stdin", "stdout", "stderr",
+        "tty", "console", "full",
+    ]
+
+    /// Redirect patterns to /dev/ — covers both `> /dev/` (with space) and `>/dev/` (no space)
+    private static let devRedirectPatterns = ["> /dev/", ">/dev/"]
+
+    /// Check if a line contains a dangerous redirect to /dev/ (block devices, etc.)
+    /// Matches `> /dev/X` and `>/dev/X` but excludes known-safe targets like /dev/null, /dev/zero.
+    private static func hasDangerousDevRedirect(_ line: String) -> Bool {
+        let lowered = line.lowercased()
+        for pattern in devRedirectPatterns {
+            var searchRange = lowered.startIndex..<lowered.endIndex
+            while let range = lowered.range(of: pattern, range: searchRange) {
+                let afterPrefix = range.upperBound
+                guard afterPrefix < lowered.endIndex else {
+                    // "> /dev/" at end of line — suspicious, flag it
+                    return true
+                }
+                // Extract the device name (chars until whitespace, quote, or end)
+                let rest = lowered[afterPrefix...]
+                let deviceName = String(rest.prefix(while: { !$0.isWhitespace && $0 != "\"" && $0 != "'" && $0 != ";" && $0 != "|" && $0 != "&" }))
+                // Check safe directory prefixes (pts, fd, shm) — exact name or subdirectory
+                let isSafePrefix = safeDevPrefixes.contains { prefix in
+                    deviceName == prefix || deviceName.hasPrefix("\(prefix)/")
+                }
+                if isSafePrefix {
+                    // safe — skip
+                } else if safeDevTargets.contains(deviceName) {
+                    // safe — skip
+                } else {
+                    return true
+                }
+                searchRange = range.upperBound..<lowered.endIndex
+            }
+        }
+        return false
+    }
+
     /// Per-line danger cache: true if that line contains a dangerous pattern
     private let lineDangerFlags: [Bool]
 
@@ -43,9 +89,10 @@ struct CommandHighlightView: View {
 
         let lines = command.components(separatedBy: "\n")
         let flags = lines.map { line in
-            Self.dangerousPatterns.contains { pattern in
-                line.localizedCaseInsensitiveContains(pattern)
+            let matchesPattern = Self.dangerousPatterns.contains { pattern in
+                line.range(of: pattern, options: .caseInsensitive) != nil
             }
+            return matchesPattern || Self.hasDangerousDevRedirect(line)
         }
         self.lineDangerFlags = flags
         self.isDangerous = flags.contains(true)
@@ -102,7 +149,7 @@ struct CommandHighlightView: View {
     private var commandText: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(Array(zip(commandLines.indices, commandLines)), id: \.0) { index, line in
-                highlightedLine(line, isDangerousLine: lineDangerFlags[index])
+                highlightedLine(line, isDangerousLine: lineDangerFlags[index], isFirstLine: index == 0)
             }
         }
     }
@@ -111,10 +158,10 @@ struct CommandHighlightView: View {
         command.components(separatedBy: "\n")
     }
 
-    private func highlightedLine(_ line: String, isDangerousLine: Bool) -> some View {
+    private func highlightedLine(_ line: String, isDangerousLine: Bool, isFirstLine: Bool) -> some View {
         HStack(spacing: 0) {
-            // Prompt symbol
-            Text("$")
+            // Prompt symbol: $ for first line, > for continuation lines
+            Text(isFirstLine ? "$" : ">")
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundColor(TerminalColors.dim)
                 .padding(.trailing, 4)
