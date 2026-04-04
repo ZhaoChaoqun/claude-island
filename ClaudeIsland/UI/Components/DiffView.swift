@@ -190,9 +190,9 @@ struct ApprovalDiffView: View {
 
     // MARK: - Diff Computation
 
-    /// Maximum line count for LCS diff. Beyond this, fall back to simple all-removed/all-added
-    /// to avoid O(m×n) memory and CPU cost on large inputs.
-    private static let lcsLineThreshold = 200
+    /// Maximum LCS complexity budget (m × n). Beyond this, fall back to simple diff
+    /// to avoid O(m×n) memory and CPU cost. 40_000 ≈ 200×200.
+    private static let lcsComplexityLimit = 40_000
 
     /// Compute diff for Edit tool (old_string → new_string) with line-level comparison.
     /// Uses LCS for small inputs; falls back to simple diff for large inputs.
@@ -200,8 +200,8 @@ struct ApprovalDiffView: View {
         let oldLines = old.components(separatedBy: "\n")
         let newLines = new.components(separatedBy: "\n")
 
-        // Guard against O(m×n) blowup on large files
-        if oldLines.count > lcsLineThreshold || newLines.count > lcsLineThreshold {
+        // Guard against O(m×n) blowup — check actual complexity, not just line count
+        if oldLines.count * newLines.count > lcsComplexityLimit {
             return computeSimpleDiff(oldLines: oldLines, newLines: newLines)
         }
 
