@@ -42,13 +42,16 @@ struct CommandHighlightView: View {
         "tty", "console", "full",
     ]
 
+    /// Redirect patterns to /dev/ — covers both `> /dev/` (with space) and `>/dev/` (no space)
+    private static let devRedirectPatterns = ["> /dev/", ">/dev/"]
+
     /// Check if a line contains a dangerous redirect to /dev/ (block devices, etc.)
-    /// Matches `> /dev/X` but excludes known-safe targets like /dev/null, /dev/zero.
+    /// Matches `> /dev/X` and `>/dev/X` but excludes known-safe targets like /dev/null, /dev/zero.
     private static func hasDangerousDevRedirect(_ line: String) -> Bool {
         let lowered = line.lowercased()
-        // Find all occurrences of "> /dev/"
-        var searchRange = lowered.startIndex..<lowered.endIndex
-        while let range = lowered.range(of: "> /dev/", range: searchRange) {
+        for pattern in devRedirectPatterns {
+            var searchRange = lowered.startIndex..<lowered.endIndex
+            while let range = lowered.range(of: pattern, range: searchRange) {
             let afterPrefix = range.upperBound
             guard afterPrefix < lowered.endIndex else {
                 // "> /dev/" at end of line — suspicious, flag it
@@ -66,6 +69,7 @@ struct CommandHighlightView: View {
                 return true
             }
             searchRange = range.upperBound..<lowered.endIndex
+            }
         }
         return false
     }
