@@ -57,8 +57,8 @@ struct CommandHighlightView: View {
             // Extract the device name (chars until whitespace, quote, or end)
             let rest = lowered[afterPrefix...]
             let deviceName = String(rest.prefix(while: { !$0.isWhitespace && $0 != "\"" && $0 != "'" && $0 != ";" && $0 != "|" && $0 != "&" }))
-            // Also handle /dev/pts/* as safe
-            if deviceName.hasPrefix("pts") {
+            // Also handle /dev/pts/*, /dev/fd/*, /dev/shm/* as safe
+            if deviceName.hasPrefix("pts") || deviceName.hasPrefix("fd") || deviceName.hasPrefix("shm") {
                 // safe — skip
             } else if safeDevTargets.contains(deviceName) {
                 // safe — skip
