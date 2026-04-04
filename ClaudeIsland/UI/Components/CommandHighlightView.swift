@@ -52,23 +52,23 @@ struct CommandHighlightView: View {
         for pattern in devRedirectPatterns {
             var searchRange = lowered.startIndex..<lowered.endIndex
             while let range = lowered.range(of: pattern, range: searchRange) {
-            let afterPrefix = range.upperBound
-            guard afterPrefix < lowered.endIndex else {
-                // "> /dev/" at end of line — suspicious, flag it
-                return true
-            }
-            // Extract the device name (chars until whitespace, quote, or end)
-            let rest = lowered[afterPrefix...]
-            let deviceName = String(rest.prefix(while: { !$0.isWhitespace && $0 != "\"" && $0 != "'" && $0 != ";" && $0 != "|" && $0 != "&" }))
-            // Also handle /dev/pts/*, /dev/fd/*, /dev/shm/* as safe
-            if deviceName.hasPrefix("pts") || deviceName.hasPrefix("fd") || deviceName.hasPrefix("shm") {
-                // safe — skip
-            } else if safeDevTargets.contains(deviceName) {
-                // safe — skip
-            } else {
-                return true
-            }
-            searchRange = range.upperBound..<lowered.endIndex
+                let afterPrefix = range.upperBound
+                guard afterPrefix < lowered.endIndex else {
+                    // "> /dev/" at end of line — suspicious, flag it
+                    return true
+                }
+                // Extract the device name (chars until whitespace, quote, or end)
+                let rest = lowered[afterPrefix...]
+                let deviceName = String(rest.prefix(while: { !$0.isWhitespace && $0 != "\"" && $0 != "'" && $0 != ";" && $0 != "|" && $0 != "&" }))
+                // Also handle /dev/pts/*, /dev/fd/*, /dev/shm/* as safe
+                if deviceName.hasPrefix("pts") || deviceName.hasPrefix("fd") || deviceName.hasPrefix("shm") {
+                    // safe — skip
+                } else if safeDevTargets.contains(deviceName) {
+                    // safe — skip
+                } else {
+                    return true
+                }
+                searchRange = range.upperBound..<lowered.endIndex
             }
         }
         return false
