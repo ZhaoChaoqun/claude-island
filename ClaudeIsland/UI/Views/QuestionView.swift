@@ -4,7 +4,7 @@
 //
 //  Inline question panel for AskUserQuestion tool.
 //  Displays question text, clickable option buttons, and optional free-text input.
-//  Supports keyboard shortcuts Cmd+1/2/3/4 for quick selection.
+//  Supports keyboard shortcuts Cmd+1/2/3/4 for quick selection (first question only).
 //
 
 import SwiftUI
@@ -13,10 +13,13 @@ struct QuestionView: View {
     let question: QuestionContext
     let onAnswer: ([String: String]) -> Void
 
+    /// Per-question multi-select state, keyed by question text
     @State private var selectedOptions: [String: Set<String>] = [:]
-    @State private var freeTextInput: String = ""
-    @State private var showFreeText: Bool = false
-    @FocusState private var isTextFieldFocused: Bool
+    /// Per-question free-text input, keyed by question text
+    @State private var freeTextInputs: [String: String] = [:]
+    /// Per-question "Other" toggle, keyed by question text
+    @State private var showFreeText: [String: Bool] = [:]
+    @FocusState private var focusedQuestion: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -46,7 +49,9 @@ struct QuestionView: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 8)
-        // Keyboard shortcuts for quick option selection (Cmd+1 through Cmd+4)
+        // Keyboard shortcuts Cmd+1-4 target the first question only.
+        // Multi-question scenarios are rare in practice; users interact
+        // via click for subsequent questions.
         .background(
             Group {
                 Button("") { selectOptionByIndex(0) }
@@ -69,6 +74,9 @@ struct QuestionView: View {
 
     @ViewBuilder
     private func questionItemView(item: QuestionItem, index: Int) -> some View {
+        let questionKey = item.question
+        let isFreeTextShown = showFreeText[questionKey] ?? false
+
         VStack(alignment: .leading, spacing: 8) {
             // Question header + text
             if let header = item.header, !header.isEmpty {
@@ -89,7 +97,7 @@ struct QuestionView: View {
             }
 
             // Free text input (shown when "Other" is selected or no options)
-            if showFreeText || item.options.isEmpty {
+            if isFreeTextShown || item.options.isEmpty {
                 freeTextInputField(item: item)
             }
         }
@@ -99,6 +107,9 @@ struct QuestionView: View {
 
     @ViewBuilder
     private func optionsGrid(item: QuestionItem, questionIndex: Int) -> some View {
+        let questionKey = item.question
+        let isFreeTextShown = showFreeText[questionKey] ?? false
+
         let columns = item.options.count <= 3
             ? [GridItem(.flexible())]
             : [GridItem(.flexible()), GridItem(.flexible())]
@@ -116,9 +127,10 @@ struct QuestionView: View {
             // "Other" option for free text
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    showFreeText.toggle()
-                    if showFreeText {
-                        isTextFieldFocused = true
+                    let current = showFreeText[questionKey] ?? false
+                    showFreeText[questionKey] = !current
+                    if !current {
+                        focusedQuestion = questionKey
                     }
                 }
             } label: {
@@ -128,12 +140,12 @@ struct QuestionView: View {
                     Text("Other")
                         .font(.system(size: 12, weight: .medium))
                 }
-                .foregroundColor(showFreeText ? .black : .white.opacity(0.7))
+                .foregroundColor(isFreeTextShown ? .black : .white.opacity(0.7))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(showFreeText ? Color.white.opacity(0.9) : Color.white.opacity(0.08))
+                        .fill(isFreeTextShown ? Color.white.opacity(0.9) : Color.white.opacity(0.08))
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
@@ -170,7 +182,7 @@ struct QuestionView: View {
 
                     Spacer()
 
-                    // Keyboard shortcut hint
+                    // Keyboard shortcut hint (only for first question)
                     if shortcutIndex < 4 {
                         Text("\u{2318}\(shortcutIndex + 1)")
                             .font(.system(size: 9, weight: .regular, design: .monospaced))
@@ -208,21 +220,29 @@ struct QuestionView: View {
 
     @ViewBuilder
     private func freeTextInputField(item: QuestionItem) -> some View {
+        let questionKey = item.question
+        let binding = Binding<String>(
+            get: { freeTextInputs[questionKey] ?? "" },
+            set: { freeTextInputs[questionKey] = $0 }
+        )
+
         HStack(spacing: 8) {
-            TextField("Type your answer...", text: $freeTextInput)
+            TextField("Type your answer...", text: binding)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .foregroundColor(.white)
-                .focused($isTextFieldFocused)
+                .focused($focusedQuestion, equals: questionKey)
                 .onSubmit {
-                    if !freeTextInput.trimmingCharacters(in: .whitespaces).isEmpty {
-                        onAnswer([item.question: freeTextInput])
+                    let text = (freeTextInputs[questionKey] ?? "").trimmingCharacters(in: .whitespaces)
+                    if !text.isEmpty {
+                        onAnswer([questionKey: text])
                     }
                 }
 
-            if !freeTextInput.isEmpty {
+            if !(freeTextInputs[questionKey] ?? "").isEmpty {
                 Button {
-                    onAnswer([item.question: freeTextInput])
+                    let text = freeTextInputs[questionKey] ?? ""
+                    onAnswer([questionKey: text])
                 } label: {
                     Image(systemName: "arrow.right.circle.fill")
                         .font(.system(size: 16))
@@ -260,6 +280,9 @@ struct QuestionView: View {
         }
     }
 
+    /// Keyboard shortcuts (Cmd+1-4) only target the first question.
+    /// AskUserQuestion typically sends 1-4 questions; in multi-question
+    /// scenarios, subsequent questions are answered via mouse click.
     private func selectOptionByIndex(_ index: Int) {
         guard let firstQuestion = question.questions.first,
               index < firstQuestion.options.count else { return }
@@ -281,8 +304,12 @@ struct QuestionView: View {
             if let selected = selectedOptions[item.question], !selected.isEmpty {
                 // Join multi-select with comma
                 answers[item.question] = selected.joined(separator: ", ")
-            } else if !freeTextInput.trimmingCharacters(in: .whitespaces).isEmpty {
-                answers[item.question] = freeTextInput
+            } else {
+                // Check per-question free text input
+                let text = (freeTextInputs[item.question] ?? "").trimmingCharacters(in: .whitespaces)
+                if !text.isEmpty {
+                    answers[item.question] = text
+                }
             }
         }
 

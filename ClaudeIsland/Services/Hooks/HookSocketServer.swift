@@ -66,10 +66,9 @@ struct HookEvent: Codable, Sendable {
                 receivedAt: Date()
             ))
         case "waiting_for_answer":
-            // Note: Full QuestionContext is constructed by determinePhase(), not here
             return .waitingForAnswer(QuestionContext(
                 toolUseId: toolUseId ?? "",
-                questions: [],
+                questions: parseQuestions(from: toolInput),
                 rawToolInput: toolInput,
                 receivedAt: Date()
             ))

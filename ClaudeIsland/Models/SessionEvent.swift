@@ -182,7 +182,7 @@ extension HookEvent {
     }
 
     /// Parse QuestionItem array from tool_input
-    private nonisolated func parseQuestions(from toolInput: [String: AnyCodable]?) -> [QuestionItem] {
+    nonisolated func parseQuestions(from toolInput: [String: AnyCodable]?) -> [QuestionItem] {
         guard let input = toolInput,
               let questionsValue = input["questions"]?.value as? [Any] else {
             return []
