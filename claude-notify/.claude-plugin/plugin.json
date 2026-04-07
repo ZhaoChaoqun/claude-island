@@ -1,0 +1,20 @@
+{
+  "name": "claude-notify",
+  "version": "0.1.0",
+  "description": "Smart terminal notifications for Claude Code. Click a notification to jump back to the right terminal pane.",
+  "author": {
+    "name": "ZhaoChaoqun"
+  },
+  "homepage": "https://github.com/ZhaoChaoqun/claude-notify",
+  "repository": "https://github.com/ZhaoChaoqun/claude-notify",
+  "license": "MIT",
+  "keywords": [
+    "notification",
+    "terminal",
+    "iterm2",
+    "tmux",
+    "cmux",
+    "focus",
+    "jump"
+  ]
+}
