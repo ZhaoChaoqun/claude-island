@@ -12,21 +12,9 @@ import os
 import shutil
 import subprocess
 import sys
-import traceback
-from datetime import datetime
 
 PLUGIN_ROOT = os.path.dirname(os.path.abspath(__file__))
 FOCUSERS_DIR = os.path.join(PLUGIN_ROOT, "focusers")
-DEBUG_LOG = "/tmp/claude-notify-debug.log"
-
-
-def log(msg):
-    """Append a timestamped diagnostic line."""
-    try:
-        with open(DEBUG_LOG, "a") as f:
-            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -150,14 +138,13 @@ def send_notification(terminal, tty, pid):
     if terminal == "cmux":
         cmux_bin = shutil.which("cmux")
         if cmux_bin:
-            log(f"BRANCH=cmux, cmd={cmux_bin} notify")
             subprocess.Popen(
                 [cmux_bin, "notify", "Claude Code 需要你的关注"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
             return
-        log("BRANCH=cmux but cmux binary not found, falling through")
+        # cmux binary not found, fall through to terminal-notifier
 
     notifier = find_notifier()
 
@@ -167,40 +154,29 @@ def send_notification(terminal, tty, pid):
         focus_script = None
 
     if notifier and focus_script and tty:
-        sender = {
-            "iterm2": "com.googlecode.iterm2",
-            "terminal_app": "com.apple.Terminal",
-            "tmux": "com.googlecode.iterm2",
-        }.get(terminal, "com.apple.Terminal")
-
         cmd = [
             notifier,
             "-title", "Claude Code",
             "-message", "Claude Code 需要你的关注",
             "-sound", "Glass",
             "-group", f"claude-notify-{tty}",
-            "-sender", sender,
             "-execute", f'"{focus_script}" "{tty}" "{pid or ""}"',
         ]
-        log(f"BRANCH=focused, cmd={cmd}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True)
-        log(f"Popen started, pid={proc.pid}")
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     elif notifier:
+        # No focus script or no TTY — plain notification
         cmd = [
             notifier,
             "-title", "Claude Code",
             "-message", "Claude Code 需要你的关注",
             "-sound", "Glass",
-            "-sender", "com.apple.Terminal",
         ]
-        log(f"BRANCH=plain, cmd={cmd}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True)
-        log(f"Popen started, pid={proc.pid}")
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     else:
-        log("BRANCH=osascript fallback (no terminal-notifier found)")
-        proc = subprocess.Popen(
+        # Final fallback — osascript
+        subprocess.Popen(
             [
                 "osascript", "-e",
                 'display notification "Claude Code 需要你的关注" '
@@ -209,7 +185,6 @@ def send_notification(terminal, tty, pid):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-        log(f"Popen started, pid={proc.pid}")
 
 
 # ---------------------------------------------------------------------------
@@ -217,39 +192,18 @@ def send_notification(terminal, tty, pid):
 # ---------------------------------------------------------------------------
 
 def main():
-    log(f"=== notify.py START === PID={os.getpid()} PPID={os.getppid()}")
-    log(f"PLUGIN_ROOT={PLUGIN_ROOT}")
-    log(f"PATH={os.environ.get('PATH', 'N/A')}")
     try:
         stdin_data = sys.stdin.read()
-        log(f"stdin({len(stdin_data)} bytes): {stdin_data[:500]}")
         data = json.loads(stdin_data) if stdin_data.strip() else {}
-    except (json.JSONDecodeError, ValueError) as e:
-        log(f"stdin parse error: {e}")
+    except (json.JSONDecodeError, ValueError):
         data = {}
 
-    log(f"hook_event={data.get('hook_event_name', 'N/A')}")
-
     tty = get_tty()
-    log(f"tty={tty}")
-
     pid = os.getppid()
     terminal = detect_terminal(pid)
-    log(f"terminal={terminal}")
-
-    notifier = find_notifier()
-    log(f"notifier={notifier}")
-
-    focus_script = os.path.join(FOCUSERS_DIR, f"{terminal}.sh")
-    log(f"focus_script={focus_script} exists={os.path.isfile(focus_script)}")
 
     send_notification(terminal, tty, pid)
-    log("=== notify.py END ===")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        log(f"UNCAUGHT EXCEPTION:\n{traceback.format_exc()}")
-        raise
+    main()
