@@ -3,13 +3,12 @@
 claude-notify — Claude Code plugin for terminal-aware notifications.
 
 Detects the current terminal emulator, sends a macOS notification,
-and jumps to the correct terminal pane/tab when the user clicks it.
+and focuses the correct terminal pane/tab automatically.
 
 Supported terminals: iTerm2, tmux, cmux, Terminal.app
 """
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -132,8 +131,20 @@ def find_notifier():
     return None
 
 
+def focus_terminal(terminal, tty, pid):
+    """Focus the correct terminal pane/tab by running the focuser script."""
+    focus_script = os.path.join(FOCUSERS_DIR, f"{terminal}.sh")
+    if not os.path.isfile(focus_script) or not tty:
+        return
+    subprocess.Popen(
+        ["bash", focus_script, tty, str(pid or "")],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
 def send_notification(terminal, tty, pid):
-    """Send notification with click-to-focus behavior."""
+    """Send notification and focus the terminal."""
 
     # cmux — use native cmux notify, no need for terminal-notifier
     if terminal == "cmux":
@@ -149,29 +160,7 @@ def send_notification(terminal, tty, pid):
 
     notifier = find_notifier()
 
-    # Build the focus command for -execute
-    focus_script = os.path.join(FOCUSERS_DIR, f"{terminal}.sh")
-    if not os.path.isfile(focus_script):
-        focus_script = None
-
-    if notifier and focus_script and tty:
-        execute_cmd = (
-            f"bash {shlex.quote(focus_script)}"
-            f" {shlex.quote(tty)}"
-            f" {shlex.quote(str(pid or ''))}"
-        )
-        cmd = [
-            notifier,
-            "-title", "Claude Code",
-            "-message", "Claude Code 需要你的关注",
-            "-sound", "Glass",
-            "-group", f"claude-notify-{tty}",
-            "-execute", execute_cmd,
-        ]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         start_new_session=True)
-    elif notifier:
-        # No focus script or no TTY — plain notification
+    if notifier:
         cmd = [
             notifier,
             "-title", "Claude Code",
@@ -181,7 +170,6 @@ def send_notification(terminal, tty, pid):
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     else:
-        # Final fallback — osascript
         subprocess.Popen(
             [
                 "osascript", "-e",
@@ -191,6 +179,9 @@ def send_notification(terminal, tty, pid):
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+
+    # Directly focus the terminal — don't rely on notification click callback
+    focus_terminal(terminal, tty, pid)
 
 
 # ---------------------------------------------------------------------------

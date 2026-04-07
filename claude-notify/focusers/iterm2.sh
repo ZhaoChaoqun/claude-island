@@ -8,13 +8,10 @@
 TTY="$1"
 [ -z "$TTY" ] && exit 1
 
-LOG="/tmp/claude-notify-debug.log"
-echo "$(date '+%H:%M:%S') iterm2.sh called with: TTY=$1 PID=$2" >> "$LOG"
-
 # Escape backslashes and double quotes for AppleScript
 ESCAPED_TTY=$(printf '%s' "$TTY" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
-osascript_output=$(osascript -e "
+osascript -e "
 tell application \"iTerm2\"
     activate
     repeat with w in windows
@@ -31,6 +28,4 @@ tell application \"iTerm2\"
     end repeat
 end tell
 return false
-" 2>&1)
-osascript_exit=$?
-echo "$(date '+%H:%M:%S') osascript exit=$osascript_exit output=$osascript_output" >> "$LOG"
+" >/dev/null 2>&1
