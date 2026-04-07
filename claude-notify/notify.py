@@ -34,16 +34,30 @@ def debug(msg):
 # ---------------------------------------------------------------------------
 
 def get_tty():
-    """Get the TTY of the Claude process (our parent)."""
-    ppid = os.getppid()
+    """Get the TTY by walking up the process tree until we find one."""
     try:
         result = subprocess.run(
-            ["ps", "-p", str(ppid), "-o", "tty="],
+            ["ps", "-axo", "pid=,ppid=,tty="],
             capture_output=True, text=True, timeout=2,
         )
-        tty = result.stdout.strip()
-        if tty and tty not in ("??", "-"):
-            return tty if tty.startswith("/dev/") else f"/dev/{tty}"
+        pids = {}  # pid -> (ppid, tty)
+        for line in result.stdout.strip().splitlines():
+            parts = line.split()
+            if len(parts) >= 3:
+                try:
+                    pids[int(parts[0])] = (int(parts[1]), parts[2])
+                except ValueError:
+                    pass
+
+        current = os.getpid()
+        for _ in range(30):
+            info = pids.get(current)
+            if info is None:
+                break
+            ppid, tty = info
+            if tty and tty not in ("??", "-"):
+                return tty if tty.startswith("/dev/") else f"/dev/{tty}"
+            current = ppid
     except Exception:
         pass
     return None
@@ -136,9 +150,11 @@ def send_notification(terminal, tty, pid):
     if terminal == "cmux":
         cmux_bin = shutil.which("cmux")
         if cmux_bin:
-            subprocess.Popen(
+            debug(f"Sending cmux notification via {cmux_bin}")
+            subprocess.run(
                 [cmux_bin, "notify", "Claude Code 需要你的关注"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=5,
             )
             return
         # cmux binary not found, fall through to terminal-notifier
@@ -167,7 +183,8 @@ def send_notification(terminal, tty, pid):
             "-sender", sender,
             "-execute", f'"{focus_script}" "{tty}" "{pid or ""}"',
         ]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        debug(f"Sending focused notification: {' '.join(cmd)}")
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     elif notifier:
         # No focus script or no TTY — plain notification
         cmd = [
@@ -177,16 +194,18 @@ def send_notification(terminal, tty, pid):
             "-sound", "Glass",
             "-sender", "com.apple.Terminal",
         ]
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        debug(f"Sending plain notification: {' '.join(cmd)}")
+        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     else:
         # Final fallback — osascript
-        subprocess.Popen(
+        debug("Sending osascript fallback notification")
+        subprocess.run(
             [
                 "osascript", "-e",
                 'display notification "Claude Code 需要你的关注" '
                 'with title "Claude Code" sound name "Glass"',
             ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
         )
 
 
