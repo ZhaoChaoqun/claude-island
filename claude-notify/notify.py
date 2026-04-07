@@ -9,24 +9,13 @@ Supported terminals: iTerm2, tmux, cmux, Terminal.app
 """
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
-import traceback
-from datetime import datetime
 
 PLUGIN_ROOT = os.path.dirname(os.path.abspath(__file__))
 FOCUSERS_DIR = os.path.join(PLUGIN_ROOT, "focusers")
-DEBUG_LOG = "/tmp/claude-notify-debug.log"
-
-
-def log(msg):
-    """Append a timestamped diagnostic line."""
-    try:
-        with open(DEBUG_LOG, "a") as f:
-            f.write(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}\n")
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -166,18 +155,21 @@ def send_notification(terminal, tty, pid):
         focus_script = None
 
     if notifier and focus_script and tty:
+        execute_cmd = (
+            f"bash {shlex.quote(focus_script)}"
+            f" {shlex.quote(tty)}"
+            f" {shlex.quote(str(pid or ''))}"
+        )
         cmd = [
             notifier,
             "-title", "Claude Code",
             "-message", "Claude Code 需要你的关注",
             "-sound", "Glass",
             "-group", f"claude-notify-{tty}",
-            "-execute", f'"{focus_script}" "{tty}" "{pid or ""}"',
+            "-execute", execute_cmd,
         ]
-        log(f"BRANCH=focused, cmd={cmd}")
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                start_new_session=True)
-        log(f"Popen pid={proc.pid}")
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     elif notifier:
         # No focus script or no TTY — plain notification
         cmd = [
@@ -186,7 +178,6 @@ def send_notification(terminal, tty, pid):
             "-message", "Claude Code 需要你的关注",
             "-sound", "Glass",
         ]
-        log(f"BRANCH=plain (focus_script={focus_script}, tty={tty}), cmd={cmd}")
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     else:
@@ -207,7 +198,6 @@ def send_notification(terminal, tty, pid):
 # ---------------------------------------------------------------------------
 
 def main():
-    log(f"=== notify.py START === PID={os.getpid()} PPID={os.getppid()}")
     try:
         stdin_data = sys.stdin.read()
         data = json.loads(stdin_data) if stdin_data.strip() else {}
@@ -217,15 +207,9 @@ def main():
     tty = get_tty()
     pid = os.getppid()
     terminal = detect_terminal(pid)
-    log(f"tty={tty} terminal={terminal} pid={pid}")
 
     send_notification(terminal, tty, pid)
-    log("=== notify.py END ===")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        log(f"UNCAUGHT EXCEPTION:\n{traceback.format_exc()}")
-        raise
+    main()

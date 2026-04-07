@@ -8,9 +8,6 @@
 TTY="$1"
 [ -z "$TTY" ] && exit 1
 
-# Debug: log invocation
-echo "$(date '+%H:%M:%S') iterm2.sh called with: TTY=$1 PID=$2" >> /tmp/claude-notify-debug.log
-
 # Escape backslashes and double quotes for AppleScript
 ESCAPED_TTY=$(printf '%s' "$TTY" | sed 's/\\/\\\\/g; s/"/\\"/g')
 
