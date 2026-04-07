@@ -87,34 +87,19 @@ def detect_terminal(pid=None):
 
     tree = get_process_tree()
 
-    found_tmux = False
-    host_terminal = "unknown"
-
     for _, comm in walk_ancestors(pid, tree):
         name = os.path.basename(comm).lower()
 
-        # cmux check — highest priority
         if "cmux" in name:
             return "cmux"
-
-        # tmux check — remember we found it, but keep looking for host
         if name.startswith("tmux"):
-            found_tmux = True
-            continue
-
-        # Terminal emulator checks
+            return "tmux"
         if name in ("iterm2", "iterm", "itermserver-main"):
-            host_terminal = "iterm2"
-            if found_tmux:
-                break
-        elif name == "terminal" or name == "terminal.app":
-            host_terminal = "terminal_app"
-            if found_tmux:
-                break
+            return "iterm2"
+        if name in ("terminal", "terminal.app"):
+            return "terminal_app"
 
-    if found_tmux:
-        return "tmux"
-    return host_terminal
+    return "unknown"
 
 
 # ---------------------------------------------------------------------------
