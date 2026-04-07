@@ -12,21 +12,9 @@ import os
 import shutil
 import subprocess
 import sys
-import datetime
 
 PLUGIN_ROOT = os.path.dirname(os.path.abspath(__file__))
 FOCUSERS_DIR = os.path.join(PLUGIN_ROOT, "focusers")
-DEBUG_LOG = "/tmp/claude-notify-debug.log"
-
-
-def debug(msg):
-    """Append a timestamped line to the debug log."""
-    try:
-        with open(DEBUG_LOG, "a") as f:
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
-            f.write(f"[{ts}] {msg}\n")
-    except Exception:
-        pass
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +138,6 @@ def send_notification(terminal, tty, pid):
     if terminal == "cmux":
         cmux_bin = shutil.which("cmux")
         if cmux_bin:
-            debug(f"Sending cmux notification via {cmux_bin}")
             subprocess.run(
                 [cmux_bin, "notify", "Claude Code 需要你的关注"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -183,7 +170,6 @@ def send_notification(terminal, tty, pid):
             "-sender", sender,
             "-execute", f'"{focus_script}" "{tty}" "{pid or ""}"',
         ]
-        debug(f"Sending focused notification: {' '.join(cmd)}")
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     elif notifier:
         # No focus script or no TTY — plain notification
@@ -194,11 +180,9 @@ def send_notification(terminal, tty, pid):
             "-sound", "Glass",
             "-sender", "com.apple.Terminal",
         ]
-        debug(f"Sending plain notification: {' '.join(cmd)}")
         subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
     else:
         # Final fallback — osascript
-        debug("Sending osascript fallback notification")
         subprocess.run(
             [
                 "osascript", "-e",
@@ -214,35 +198,17 @@ def send_notification(terminal, tty, pid):
 # ---------------------------------------------------------------------------
 
 def main():
-    debug(f"=== notify.py started === PID={os.getpid()} PPID={os.getppid()}")
-    debug(f"PLUGIN_ROOT={PLUGIN_ROOT}")
-    debug(f"FOCUSERS_DIR={FOCUSERS_DIR}")
-
     try:
         stdin_data = sys.stdin.read()
-        debug(f"stdin raw: {stdin_data[:500]}")
         data = json.loads(stdin_data) if stdin_data.strip() else {}
-    except (json.JSONDecodeError, ValueError) as e:
-        debug(f"stdin parse error: {e}")
+    except (json.JSONDecodeError, ValueError):
         data = {}
 
-    debug(f"hook_event_name={data.get('hook_event_name', 'N/A')}")
-
     tty = get_tty()
-    debug(f"tty={tty}")
-
     pid = os.getppid()
     terminal = detect_terminal(pid)
-    debug(f"terminal={terminal}")
-
-    notifier = find_notifier()
-    debug(f"notifier={notifier}")
-
-    focus_script = os.path.join(FOCUSERS_DIR, f"{terminal}.sh")
-    debug(f"focus_script={focus_script} exists={os.path.isfile(focus_script)}")
 
     send_notification(terminal, tty, pid)
-    debug("=== notify.py finished ===")
 
 
 if __name__ == "__main__":
