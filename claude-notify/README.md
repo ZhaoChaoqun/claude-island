@@ -40,7 +40,7 @@ claude plugin install /path/to/claude-notify
 ## How It Works
 
 ```
-Claude Code fires Notification hook
+Claude Code fires Stop hook (task complete, waiting for input)
         |
    notify.py reads hook input
         |
