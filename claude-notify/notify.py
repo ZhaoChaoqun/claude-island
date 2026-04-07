@@ -188,10 +188,6 @@ def main():
     except (json.JSONDecodeError, ValueError):
         data = {}
 
-    # Skip permission_prompt — PermissionRequest hook handles it
-    if data.get("notification_type") == "permission_prompt":
-        sys.exit(0)
-
     tty = get_tty()
     pid = os.getppid()
     terminal = detect_terminal(pid)

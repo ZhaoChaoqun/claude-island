@@ -1,12 +1,11 @@
 {
   "hooks": {
-    "Notification": [
+    "Stop": [
       {
-        "matcher": "*",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/notify.py\""
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/notify.py"
           }
         ]
       }
