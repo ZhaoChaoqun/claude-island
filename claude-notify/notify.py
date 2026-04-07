@@ -138,10 +138,10 @@ def send_notification(terminal, tty, pid):
     if terminal == "cmux":
         cmux_bin = shutil.which("cmux")
         if cmux_bin:
-            subprocess.run(
+            subprocess.Popen(
                 [cmux_bin, "notify", "Claude Code 需要你的关注"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=5,
+                start_new_session=True,
             )
             return
         # cmux binary not found, fall through to terminal-notifier
@@ -170,7 +170,8 @@ def send_notification(terminal, tty, pid):
             "-sender", sender,
             "-execute", f'"{focus_script}" "{tty}" "{pid or ""}"',
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     elif notifier:
         # No focus script or no TTY — plain notification
         cmd = [
@@ -180,16 +181,18 @@ def send_notification(terminal, tty, pid):
             "-sound", "Glass",
             "-sender", "com.apple.Terminal",
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
     else:
         # Final fallback — osascript
-        subprocess.run(
+        subprocess.Popen(
             [
                 "osascript", "-e",
                 'display notification "Claude Code 需要你的关注" '
                 'with title "Claude Code" sound name "Glass"',
             ],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
         )
 
 
