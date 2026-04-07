@@ -146,6 +146,16 @@ def focus_terminal(terminal, tty, pid):
 def send_notification(terminal, tty, pid):
     """Send notification and focus the terminal."""
 
+    # iTerm2 — use OSC 9 escape sequence for native notification.
+    # Clicking the notification auto-focuses the originating session/pane.
+    if terminal == "iterm2" and tty:
+        try:
+            with open(tty, "w") as f:
+                f.write("\033]9;Claude Code 需要你的关注\007")
+            return
+        except (OSError, IOError):
+            pass  # Fall through to terminal-notifier
+
     # cmux — use native cmux notify, no need for terminal-notifier
     if terminal == "cmux":
         cmux_bin = shutil.which("cmux")
