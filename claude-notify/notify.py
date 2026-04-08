@@ -151,7 +151,7 @@ def send_notification(terminal, tty, pid):
     if terminal == "iterm2" and tty:
         try:
             with open(tty, "w") as f:
-                f.write("\033]9;Claude Code 需要你的关注\007")
+                f.write("\033]9;Claude 完成了，来看看吧\007")
             return
         except (OSError, IOError):
             pass  # Fall through to terminal-notifier
@@ -161,7 +161,7 @@ def send_notification(terminal, tty, pid):
         cmux_bin = shutil.which("cmux")
         if cmux_bin:
             subprocess.Popen(
-                [cmux_bin, "notify", "Claude Code 需要你的关注"],
+                [cmux_bin, "notify", "Claude 完成了，来看看吧"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
@@ -174,7 +174,7 @@ def send_notification(terminal, tty, pid):
         cmd = [
             notifier,
             "-title", "Claude Code",
-            "-message", "Claude Code 需要你的关注",
+            "-message", "Claude 完成了，来看看吧",
             "-sound", "Glass",
         ]
         subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -183,7 +183,7 @@ def send_notification(terminal, tty, pid):
         subprocess.Popen(
             [
                 "osascript", "-e",
-                'display notification "Claude Code 需要你的关注" '
+                'display notification "Claude 完成了，来看看吧" '
                 'with title "Claude Code" sound name "Glass"',
             ],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
