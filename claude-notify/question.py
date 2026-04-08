@@ -88,7 +88,7 @@ def main():
         alerter,
         "--title", title,
         "--message", question_text,
-        "--closeLabel", "Skip",
+        "--close-label", "Skip",
         "--actions", ",".join(labels),
         "--timeout", str(ALERTER_TIMEOUT),
         "--sound", "default",
