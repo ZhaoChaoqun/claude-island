@@ -67,6 +67,11 @@ def main():
     if not options or len(options) > MAX_OPTIONS:
         return
 
+    # Labels with commas would be split by alerter's --actions parser
+    raw_labels = [opt.get("label", "") for opt in options]
+    if any("," in label for label in raw_labels):
+        return
+
     alerter = find_alerter()
     if not alerter:
         return
@@ -108,14 +113,14 @@ def main():
         # @CLOSED, @TIMEOUT, Skip, or unexpected — fall back to terminal
         return
 
+    updated_input = dict(tool_input)
+    updated_input["answers"] = {question_text: selected}
+
     decision = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
-            "updatedInput": {
-                "questions": questions,
-                "answers": {question_text: selected},
-            },
+            "updatedInput": updated_input,
         }
     }
     json.dump(decision, sys.stdout, ensure_ascii=False)
