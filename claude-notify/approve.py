@@ -79,7 +79,7 @@ def main():
                 alerter,
                 "--title", f"Claude Code — {tool_name}",
                 "--message", summary,
-                "--closeLabel", "Deny",
+                "--close-label", "Deny",
                 "--actions", "Approve",
                 "--timeout", str(ALERTER_TIMEOUT),
                 "--sound", "default",
