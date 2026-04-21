@@ -123,7 +123,7 @@ actor ConversationParser {
             if type == "user" && !isMeta {
                 if let message = json["message"] as? [String: Any],
                    let msgContent = message["content"] as? String {
-                    if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
+                    if !Self.isCommandOnlyContent(msgContent) {
                         firstUserMessage = Self.truncateMessage(msgContent, maxLength: 50)
                         break
                     }
@@ -145,7 +145,7 @@ actor ConversationParser {
                     let isMeta = json["isMeta"] as? Bool ?? false
                     if !isMeta, let message = json["message"] as? [String: Any] {
                         if let msgContent = message["content"] as? String {
-                            if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
+                            if !Self.isCommandOnlyContent(msgContent) {
                                 lastMessage = msgContent
                                 lastMessageRole = type
                             }
@@ -176,7 +176,7 @@ actor ConversationParser {
                 let isMeta = json["isMeta"] as? Bool ?? false
                 if !isMeta, let message = json["message"] as? [String: Any] {
                     if let msgContent = message["content"] as? String {
-                        if !msgContent.hasPrefix("<command-name>") && !msgContent.hasPrefix("<local-command") && !msgContent.hasPrefix("Caveat:") {
+                        if !Self.isCommandOnlyContent(msgContent) {
                             if let timestampStr = json["timestamp"] as? String {
                                 lastUserMessageDate = formatter.date(from: timestampStr)
                             }
@@ -246,6 +246,47 @@ actor ConversationParser {
             }
         }
         return ""
+    }
+
+    /// Regex matching `<command-*>...</command-*>` and `<local-command-*>...</local-command-*>` wrappers
+    /// that Claude Code injects into user messages for slash commands and local shell output.
+    /// Matched non-greedily so multiple wrappers on the same line are each stripped individually.
+    private static let commandWrapperRegex: NSRegularExpression? = {
+        // Two alternatives instead of a backreference, because ICU treats a
+        // backreference to an unmatched optional group as "no match" rather than
+        // an empty match, which would miss plain `<command-*>` wrappers entirely.
+        let pattern = #"<command-[a-z-]+>[\s\S]*?</command-[a-z-]+>|<local-command-[a-z-]+>[\s\S]*?</local-command-[a-z-]+>"#
+        return try? NSRegularExpression(pattern: pattern, options: [])
+    }()
+
+    /// Returns true when `content` contains only Claude Code's command wrappers
+    /// (e.g. `<command-name>`, `<command-message>`, `<command-args>`,
+    /// `<local-command-stdout>`, `<local-command-caveat>`, ...) or a bare "Caveat:" prelude,
+    /// and therefore should not be shown as a user message.
+    ///
+    /// Unlike a prefix check, this strips every wrapper first and inspects what remains,
+    /// so a message like `<command-message>init</command-message>\n<command-name>/init</command-name>`
+    /// is recognized as command-only even though `<command-message>` (not `<command-name>`) comes first.
+    /// It also correctly preserves any real user text that happens to be mixed in with the wrappers.
+    static func isCommandOnlyContent(_ content: String) -> Bool {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        if trimmed.hasPrefix("Caveat:") { return true }
+
+        guard let regex = commandWrapperRegex else {
+            // Fallback to the old prefix heuristic if the regex failed to compile.
+            return trimmed.hasPrefix("<command-") || trimmed.hasPrefix("<local-command")
+        }
+
+        let range = NSRange(trimmed.startIndex..., in: trimmed)
+        let stripped = regex.stringByReplacingMatches(
+            in: trimmed,
+            options: [],
+            range: range,
+            withTemplate: ""
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return stripped.isEmpty
     }
 
     /// Truncate message for display
@@ -503,7 +544,7 @@ actor ConversationParser {
         var blocks: [MessageBlock] = []
 
         if let content = messageDict["content"] as? String {
-            if content.hasPrefix("<command-name>") || content.hasPrefix("<local-command") || content.hasPrefix("Caveat:") {
+            if Self.isCommandOnlyContent(content) {
                 return nil
             }
             if content.hasPrefix("[Request interrupted by user") {
