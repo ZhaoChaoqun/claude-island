@@ -19,11 +19,17 @@ Terminal detection is automatic -- zero configuration needed.
 
 - macOS
 - Python 3 (ships with macOS)
-- [terminal-notifier](https://github.com/julienXX/terminal-notifier) (not needed for cmux)
+- [terminal-notifier](https://github.com/julienXX/terminal-notifier) — for notifications (not needed for cmux)
+- [alerter](https://github.com/vjeantet/alerter) — optional, for approve/deny and question notifications
 
 ```bash
 brew install terminal-notifier
+
+# Optional: enables approve/deny buttons and interactive question notifications
+brew install vjeantet/tap/alerter
 ```
+
+Without alerter, basic notifications still work. Claude Code will fall back to its terminal-based prompts for permission requests and questions.
 
 ## Install
 
